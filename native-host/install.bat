@@ -2,6 +2,7 @@
 echo Installing Browser Recorder Native Host...
 echo.
 
+set "EXTENSION_ID=fbolclmlfaembkbdmcoolodndpejbbkn"
 set "CONFIG_PATH=%~dp0com.browserrecorder.nativehost.json"
 set "ABS_CONFIG_PATH=%CONFIG_PATH:\=\\%"
 set "HOST_PATH=%~dp0native-host-launcher.bat"
@@ -14,7 +15,7 @@ echo   "description": "Native host for Browser Operation Recorder", >> "%TEMP%\c
 echo   "path": "%ABS_HOST_PATH%", >> "%TEMP%\com.browserrecorder.nativehost.json"
 echo   "type": "stdio", >> "%TEMP%\com.browserrecorder.nativehost.json"
 echo   "allowed_origins": [ >> "%TEMP%\com.browserrecorder.nativehost.json"
-echo     "chrome-extension://*" >> "%TEMP%\com.browserrecorder.nativehost.json"
+echo     "chrome-extension://%EXTENSION_ID%/" >> "%TEMP%\com.browserrecorder.nativehost.json"
 echo   ] >> "%TEMP%\com.browserrecorder.nativehost.json"
 echo } >> "%TEMP%\com.browserrecorder.nativehost.json"
 
@@ -28,17 +29,9 @@ reg add "%REG_KEY_EDGE%" /ve /t REG_SZ /d "%TEMP%\com.browserrecorder.nativehost
 
 echo Installed Native Messaging host configuration.
 echo.
-echo Now installing Node.js dependencies...
-cd /d "%~dp0"
-call npm install
-if errorlevel 1 (
-    echo.
-    echo Failed to install dependencies. Please install Node.js and run:
-    echo   npm install
-    echo in the native-host directory.
-) else (
-    echo.
-    echo Installation complete!
-)
+echo Native host now uses Windows PowerShell + SendInput.
+echo No Node.js dependency installation is required.
+echo.
+echo Installation complete!
 echo.
 pause

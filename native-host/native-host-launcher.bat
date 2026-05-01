@@ -1,3 +1,3 @@
 @echo off
 cd /d "%~dp0"
-node native-host.js
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0native-host.ps1"

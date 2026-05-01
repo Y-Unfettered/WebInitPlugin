@@ -12,6 +12,28 @@ let recordingData = {
 };
 
 let activeTabId = null;
+const NATIVE_HOST_NAME = 'com.browserrecorder.nativehost';
+let nativePlaybackAvailable = null;
+const ENABLE_NATIVE_COORDINATE_PLAYBACK = true;
+const viewportCalibrationCache = new Map();
+const PLAYBACK_HOVER_STEPS = false;
+
+const ROBOT_KEY_MAP = {
+  Enter: 'enter',
+  Tab: 'tab',
+  Escape: 'escape',
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+  Backspace: 'backspace',
+  Delete: 'delete',
+  Home: 'home',
+  End: 'end',
+  PageUp: 'pageup',
+  PageDown: 'pagedown',
+  ' ': 'space'
+};
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log('Browser Operation Recorder installed');
@@ -258,12 +280,17 @@ async function handleRecordEvent(eventData) {
         selector: eventData.locator?.cssSelector || '',
         xpath: eventData.locator?.xpath || '',
         text: eventData.element?.textContent || '',
+        tagName: eventData.element?.tagName || '',
+        accessibleName: eventData.locator?.accessibleName || '',
         attributes: {
           id: eventData.element?.id || '',
           className: eventData.element?.className || '',
           name: eventData.element?.name || '',
           type: eventData.element?.type || '',
-          value: eventData.element?.value || ''
+          value: eventData.element?.value || '',
+          href: eventData.element?.href || '',
+          ariaLabel: eventData.element?.ariaLabel || '',
+          role: eventData.element?.role || ''
         }
       },
       data: {}
@@ -271,25 +298,38 @@ async function handleRecordEvent(eventData) {
 
     if (eventData.eventType === 'input') {
       operation.data.value = eventData.inputValue || '';
+      operation.data.position = eventData.position || null;
+      operation.data.screenPosition = eventData.screenPosition || null;
+      operation.data.viewportContext = eventData.viewportContext || null;
     } else if (eventData.eventType === 'change') {
       operation.data.newValue = eventData.newValue;
       operation.data.value = eventData.newValue;
+      operation.data.position = eventData.position || null;
+      operation.data.screenPosition = eventData.screenPosition || null;
+      operation.data.viewportContext = eventData.viewportContext || null;
     } else if (eventData.eventType === 'navigate') {
       operation.data.url = eventData.url;
     } else if (eventData.eventType === 'scroll') {
       operation.data.scrollPosition = eventData.scrollPosition;
     } else if (eventData.eventType === 'click') {
       operation.data.position = eventData.position;
+      operation.data.screenPosition = eventData.screenPosition || null;
+      operation.data.viewportContext = eventData.viewportContext || null;
       if (eventData.url) {
         operation.data.url = eventData.url;
       }
     } else if (eventData.eventType === 'hover') {
       operation.data.position = eventData.position;
+      operation.data.screenPosition = eventData.screenPosition || null;
+      operation.data.viewportContext = eventData.viewportContext || null;
       if (eventData.url) {
         operation.data.url = eventData.url;
       }
     } else if (eventData.eventType === 'key') {
       operation.data = eventData.keyData || {};
+      operation.data.position = eventData.position || null;
+      operation.data.screenPosition = eventData.screenPosition || null;
+      operation.data.viewportContext = eventData.viewportContext || null;
       if (eventData.url) {
         operation.data.url = eventData.url;
       }
@@ -410,6 +450,8 @@ let playbackData = {
 async function handleStartPlayback(operations, port) {
   try {
     clearPlaybackTimer();
+    nativePlaybackAvailable = null;
+    viewportCalibrationCache.clear();
     playbackData.operations = operations;
     playbackData.currentStep = 0;
     playbackData.isPlaying = true;
@@ -454,8 +496,13 @@ async function executeStep(tabId, stepIndex, scheduleNext = true) {
     let delayMs = 800;
 
     if (step.type === 'hover') {
-      await executeHover(tabId, step);
-      delayMs = 500;
+      if (PLAYBACK_HOVER_STEPS) {
+        await executeHover(tabId, step);
+        delayMs = 500;
+      } else {
+        console.log('Skipping hover step during playback');
+        delayMs = 100;
+      }
     } else if (step.type === 'click') {
       await executeClick(tabId, step);
       delayMs = 2000;
@@ -505,20 +552,292 @@ async function executeStep(tabId, stepIndex, scheduleNext = true) {
   }
 }
 
-async function findElement(tabId, selector, xpath) {
+function locatePlaybackElement(target, recordedPosition, mode = 'exists') {
+  const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const normalizedText = normalize(target?.text);
+  const normalizedAccessibleName = normalize(target?.accessibleName || target?.attributes?.ariaLabel);
+  const expectedHref = target?.attributes?.href || '';
+  const expectedId = target?.attributes?.id || '';
+  const expectedName = target?.attributes?.name || '';
+  const expectedType = target?.attributes?.type || '';
+  const expectedRole = target?.attributes?.role || '';
+  const expectedTag = String(target?.tagName || '').toUpperCase();
+  const selector = target?.selector || '';
+  const xpath = target?.xpath || '';
+
+  const addCandidate = (list, element, source) => {
+    if (!element || list.some((entry) => entry.element === element)) {
+      return;
+    }
+    list.push({ element, source });
+  };
+
+  const collectByXPath = (expr) => {
+    const results = [];
+    try {
+      const snapshot = document.evaluate(expr, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      for (let i = 0; i < snapshot.snapshotLength; i++) {
+        const node = snapshot.snapshotItem(i);
+        if (node?.nodeType === Node.ELEMENT_NODE) {
+          results.push(node);
+        }
+      }
+    } catch (error) {
+      console.warn('XPath lookup failed:', error);
+    }
+    return results;
+  };
+
+  const collectCandidates = () => {
+    const candidates = [];
+
+    if (selector) {
+      try {
+        document.querySelectorAll(selector).forEach((element) => addCandidate(candidates, element, 'selector'));
+      } catch (error) {
+        console.warn('Selector lookup failed:', error);
+      }
+    }
+
+    if (xpath) {
+      collectByXPath(xpath).forEach((element) => addCandidate(candidates, element, 'xpath'));
+    }
+
+    if (expectedId) {
+      const byId = document.getElementById(expectedId);
+      addCandidate(candidates, byId, 'id');
+    }
+
+    if (expectedHref) {
+      document.querySelectorAll('a[href]').forEach((element) => {
+        if (element.href === expectedHref || element.getAttribute('href') === expectedHref) {
+          addCandidate(candidates, element, 'href');
+        }
+      });
+    }
+
+    if (normalizedAccessibleName) {
+      document.querySelectorAll('[aria-label]').forEach((element) => {
+        if (normalize(element.getAttribute('aria-label')) === normalizedAccessibleName) {
+          addCandidate(candidates, element, 'aria');
+        }
+      });
+    }
+
+    if (expectedName) {
+      document.querySelectorAll(`[name="${CSS.escape(expectedName)}"]`).forEach((element) => addCandidate(candidates, element, 'name'));
+    }
+
+    if (normalizedText) {
+      const textSelector = expectedTag ? expectedTag.toLowerCase() : 'a,button,[role="button"],li,span,div';
+      document.querySelectorAll(textSelector).forEach((element) => {
+        if (normalize(element.textContent) === normalizedText) {
+          addCandidate(candidates, element, 'text');
+        }
+      });
+    }
+
+    return candidates;
+  };
+
+  const scoreCandidate = (entry) => {
+    const element = entry.element;
+    const text = normalize(element.textContent);
+    const ariaLabel = normalize(element.getAttribute('aria-label'));
+    const href = element.href || element.getAttribute('href') || '';
+    const tagName = element.tagName;
+    const rect = element.getBoundingClientRect();
+    let score = 0;
+
+    if (entry.source === 'selector') score += 80;
+    if (entry.source === 'xpath') score += 70;
+    if (entry.source === 'id') score += 120;
+    if (entry.source === 'href') score += 160;
+    if (entry.source === 'aria') score += 140;
+    if (entry.source === 'name') score += 110;
+    if (entry.source === 'text') score += 130;
+    if (expectedTag && tagName === expectedTag) score += 50;
+    if (expectedType && String(element.type || '') === expectedType) score += 30;
+    if (expectedRole && String(element.getAttribute('role') || '') === expectedRole) score += 25;
+    if (normalizedText && text === normalizedText) score += 180;
+    if (normalizedAccessibleName && ariaLabel === normalizedAccessibleName) score += 120;
+    if (expectedHref && href === expectedHref) score += 220;
+    if (expectedId && element.id === expectedId) score += 120;
+    if (expectedName && element.getAttribute('name') === expectedName) score += 70;
+
+    if (recordedPosition && typeof recordedPosition.x === 'number' && typeof recordedPosition.y === 'number') {
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const distance = Math.hypot(centerX - recordedPosition.x, centerY - recordedPosition.y);
+      score -= Math.min(distance, 400);
+    }
+
+    if (rect.width <= 0 || rect.height <= 0) score -= 200;
+    return { element, score };
+  };
+
+  const candidates = collectCandidates();
+  if (candidates.length === 0) {
+    return mode === 'exists' ? false : null;
+  }
+
+  const best = candidates
+    .map(scoreCandidate)
+    .sort((left, right) => right.score - left.score)[0];
+
+  if (!best || best.score < 0) {
+    return mode === 'exists' ? false : null;
+  }
+
+  if (mode === 'exists') {
+    return true;
+  }
+
+  return best.element;
+}
+
+const LOCATE_PLAYBACK_ELEMENT_SOURCE = locatePlaybackElement.toString();
+
+function getPlaybackElementViewportPosition(playbackTarget, recordedPosition) {
+  const element = locatePlaybackElement(playbackTarget, recordedPosition, 'element');
+  if (!element) {
+    return null;
+  }
+
+  let rect = element.getBoundingClientRect();
+  const isVisible =
+    rect.width > 0 &&
+    rect.height > 0 &&
+    rect.bottom >= 0 &&
+    rect.right >= 0 &&
+    rect.top <= window.innerHeight &&
+    rect.left <= window.innerWidth;
+
+  if (!isVisible) {
+    element.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
+    rect = element.getBoundingClientRect();
+  }
+
+  const isRecordedPointInside =
+    recordedPosition &&
+    typeof recordedPosition.x === 'number' &&
+    typeof recordedPosition.y === 'number' &&
+    recordedPosition.x >= rect.left &&
+    recordedPosition.x <= rect.right &&
+    recordedPosition.y >= rect.top &&
+    recordedPosition.y <= rect.bottom;
+
+  const clientX = isRecordedPointInside ? recordedPosition.x : rect.left + rect.width / 2;
+  const clientY = isRecordedPointInside ? recordedPosition.y : rect.top + rect.height / 2;
+
+  return {
+    clientX,
+    clientY,
+    tagName: element.tagName,
+    type: element.type || '',
+    selector: playbackTarget?.selector || '',
+    xpath: playbackTarget?.xpath || '',
+    rect: {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height
+    }
+  };
+}
+
+function focusPlaybackElement(playbackTarget, recordedPosition) {
+  const element = locatePlaybackElement(playbackTarget, recordedPosition, 'element');
+  if (!element) {
+    return false;
+  }
+
+  element.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
+  element.focus();
+  return true;
+}
+
+function hoverPlaybackElement(playbackTarget, recordedPosition) {
+  const element = locatePlaybackElement(playbackTarget, recordedPosition, 'element');
+  if (!element) {
+    return false;
+  }
+
+  const rect = element.getBoundingClientRect();
+  const mouseX = recordedPosition?.x ?? rect.left + rect.width / 2;
+  const mouseY = recordedPosition?.y ?? rect.top + rect.height / 2;
+
+  element.dispatchEvent(new MouseEvent('mouseover', {
+    bubbles: true,
+    cancelable: true,
+    clientX: mouseX,
+    clientY: mouseY
+  }));
+  element.dispatchEvent(new MouseEvent('mouseenter', {
+    bubbles: false,
+    cancelable: true,
+    clientX: mouseX,
+    clientY: mouseY
+  }));
+
+  return true;
+}
+
+function clickPlaybackElement(playbackTarget, recordedPosition) {
+  const element = locatePlaybackElement(playbackTarget, recordedPosition, 'element');
+  if (!element) {
+    return { success: false, error: 'Element not found' };
+  }
+
+  element.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
+  element.focus();
+  element.click();
+
+  if (element.tagName === 'FORM') {
+    element.submit();
+  }
+
+  return { success: true, tagName: element.tagName, className: element.className };
+}
+
+function fillPlaybackElement(playbackTarget, recordedPosition, inputText) {
+  const element = locatePlaybackElement(playbackTarget, recordedPosition, 'element');
+  if (!element) {
+    return false;
+  }
+
+  element.focus();
+  element.value = '';
+  element.dispatchEvent(new Event('input', { bubbles: true }));
+  element.value = inputText;
+  element.dispatchEvent(new Event('input', { bubbles: true }));
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+}
+
+function changePlaybackElement(playbackTarget, recordedPosition, value) {
+  const element = locatePlaybackElement(playbackTarget, recordedPosition, 'element');
+  if (!element) {
+    return false;
+  }
+
+  if (element.tagName === 'SELECT') {
+    element.value = value;
+  } else if (element.type === 'checkbox' || element.type === 'radio') {
+    element.checked = value;
+  } else {
+    element.value = value;
+  }
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+}
+
+async function findElement(tabId, target, position) {
   try {
     const result = await chrome.scripting.executeScript({
       target: { tabId: tabId },
-      func: (sel, xp) => {
-        let element = null;
-        if (sel) element = document.querySelector(sel);
-        if (!element && xp) {
-          const result = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-          element = result.singleNodeValue;
-        }
-        return element !== null;
-      },
-      args: [selector, xpath]
+      func: locatePlaybackElement,
+      args: [target || {}, position || null, 'exists']
     });
     return result[0]?.result;
   } catch (error) {
@@ -527,39 +846,476 @@ async function findElement(tabId, selector, xpath) {
   }
 }
 
+function sendNativeHostMessage(payload) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, payload, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      if (!response) {
+        reject(new Error('Native host returned an empty response'));
+        return;
+      }
+      if (response.success === false) {
+        reject(new Error(response.error || 'Native host returned an error'));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
+async function ensureNativePlaybackAvailable() {
+  if (nativePlaybackAvailable === true) {
+    return true;
+  }
+
+  try {
+    await sendNativeHostMessage({ action: 'ping' });
+    nativePlaybackAvailable = true;
+    return true;
+  } catch (error) {
+    nativePlaybackAvailable = false;
+    console.warn('Native host unavailable, falling back to DOM playback:', error.message);
+    return false;
+  }
+}
+
+function mapRobotKey(key) {
+  if (!key) {
+    return '';
+  }
+
+  if (ROBOT_KEY_MAP[key]) {
+    return ROBOT_KEY_MAP[key];
+  }
+
+  return key.length === 1 ? key.toLowerCase() : key.toLowerCase();
+}
+
+function getRobotModifiers(step) {
+  const modifiers = [];
+  if (step.data?.ctrlKey) modifiers.push('control');
+  if (step.data?.altKey) modifiers.push('alt');
+  if (step.data?.metaKey) modifiers.push('command');
+  if (step.data?.shiftKey) modifiers.push('shift');
+  return modifiers;
+}
+
+async function getTabWindowInfo(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    return await chrome.windows.get(tab.windowId);
+  } catch (error) {
+    console.error('Failed to get tab window info:', error);
+    return null;
+  }
+}
+
+async function getViewportCalibration(tabId, forceRefresh = false) {
+  try {
+    const windowInfo = await getTabWindowInfo(tabId);
+    if (!windowInfo) {
+      return null;
+    }
+
+    const cacheKey = windowInfo.id;
+    if (!forceRefresh && viewportCalibrationCache.has(cacheKey)) {
+      return viewportCalibrationCache.get(cacheKey);
+    }
+
+    const result = await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: () => ({
+        screenX: window.screenX,
+        screenY: window.screenY,
+        outerWidth: window.outerWidth,
+        outerHeight: window.outerHeight,
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+        devicePixelRatio: window.devicePixelRatio || 1,
+        visualViewportOffsetLeft: window.visualViewport?.offsetLeft || 0,
+        visualViewportOffsetTop: window.visualViewport?.offsetTop || 0
+      })
+    });
+
+    const metrics = result[0]?.result;
+    if (!metrics) {
+      return null;
+    }
+
+    const scaleX =
+      metrics.outerWidth > 0 && typeof windowInfo.width === 'number'
+        ? windowInfo.width / metrics.outerWidth
+        : 1;
+    const scaleY =
+      metrics.outerHeight > 0 && typeof windowInfo.height === 'number'
+        ? windowInfo.height / metrics.outerHeight
+        : 1;
+
+    const calibration = {
+      windowId: windowInfo.id,
+      windowLeft: windowInfo.left || 0,
+      windowTop: windowInfo.top || 0,
+      scaleX,
+      scaleY,
+      contentOriginX: (windowInfo.left || 0) + (metrics.screenX - (windowInfo.left || 0)) * scaleX,
+      contentOriginY: (windowInfo.top || 0) + (metrics.screenY - (windowInfo.top || 0)) * scaleY,
+      viewportMetrics: metrics
+    };
+
+    viewportCalibrationCache.set(cacheKey, calibration);
+    return calibration;
+  } catch (error) {
+    console.error('Failed to build viewport calibration:', error);
+    return null;
+  }
+}
+
+async function getElementViewportPosition(tabId, target, position) {
+  try {
+    const result = await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: (locatorSource, playbackTarget, recordedPosition) => {
+        const locate = new Function(`return (${locatorSource});`)();
+        const element = locate(playbackTarget, recordedPosition, 'element');
+        if (!element) {
+          return null;
+        }
+
+        let rect = element.getBoundingClientRect();
+        const isVisible =
+          rect.width > 0 &&
+          rect.height > 0 &&
+          rect.bottom >= 0 &&
+          rect.right >= 0 &&
+          rect.top <= window.innerHeight &&
+          rect.left <= window.innerWidth;
+
+        if (!isVisible) {
+          element.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
+          rect = element.getBoundingClientRect();
+        }
+
+        const isRecordedPointInside =
+          recordedPosition &&
+          typeof recordedPosition.x === 'number' &&
+          typeof recordedPosition.y === 'number' &&
+          recordedPosition.x >= rect.left &&
+          recordedPosition.x <= rect.right &&
+          recordedPosition.y >= rect.top &&
+          recordedPosition.y <= rect.bottom;
+
+        const clientX = isRecordedPointInside ? recordedPosition.x : rect.left + rect.width / 2;
+        const clientY = isRecordedPointInside ? recordedPosition.y : rect.top + rect.height / 2;
+
+        return {
+          clientX,
+          clientY,
+          tagName: element.tagName,
+          type: element.type || '',
+          selector: playbackTarget?.selector || '',
+          xpath: playbackTarget?.xpath || '',
+          rect: {
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height
+          }
+        };
+      },
+      args: [LOCATE_PLAYBACK_ELEMENT_SOURCE, target || {}, position || null]
+    });
+
+    return result[0]?.result || null;
+  } catch (error) {
+    console.error('Failed to compute native viewport position:', error);
+    return null;
+  }
+}
+
+async function getElementScreenPosition(tabId, target, position) {
+  try {
+    const [calibration, viewportPosition] = await Promise.all([
+      getViewportCalibration(tabId, true),
+      getElementViewportPosition(tabId, target, position)
+    ]);
+
+    if (!calibration || !viewportPosition) {
+      return null;
+    }
+
+    return {
+      ...viewportPosition,
+      screenX: Math.round(calibration.contentOriginX + viewportPosition.clientX * calibration.scaleX),
+      screenY: Math.round(calibration.contentOriginY + viewportPosition.clientY * calibration.scaleY),
+      calibration
+    };
+  } catch (error) {
+    console.error('Failed to compute native screen position:', error);
+    return null;
+  }
+}
+
+function convertViewportPointToScreenPoint(clientPosition, calibration) {
+  if (
+    !clientPosition ||
+    typeof clientPosition.x !== 'number' ||
+    typeof clientPosition.y !== 'number' ||
+    !calibration
+  ) {
+    return null;
+  }
+
+  return {
+    screenX: Math.round(calibration.contentOriginX + clientPosition.x * calibration.scaleX),
+    screenY: Math.round(calibration.contentOriginY + clientPosition.y * calibration.scaleY)
+  };
+}
+
+async function getNativeScreenPositionForStep(tabId, step) {
+  const recordedScreenPosition = step?.data?.screenPosition;
+  if (
+    recordedScreenPosition &&
+    typeof recordedScreenPosition.x === 'number' &&
+    typeof recordedScreenPosition.y === 'number'
+  ) {
+    return {
+      screenX: Math.round(recordedScreenPosition.x),
+      screenY: Math.round(recordedScreenPosition.y),
+      source: 'recorded-screen'
+    };
+  }
+
+  const calibration = await getViewportCalibration(tabId, true);
+  const fromRecordedViewport = convertViewportPointToScreenPoint(step?.data?.position, calibration);
+  if (fromRecordedViewport) {
+    return {
+      ...fromRecordedViewport,
+      source: 'recorded-viewport'
+    };
+  }
+
+  const computed = await getElementScreenPosition(tabId, step.target || {}, step.data?.position || null);
+  if (!computed) {
+    return null;
+  }
+
+  return {
+    screenX: computed.screenX,
+    screenY: computed.screenY,
+    source: 'computed'
+  };
+}
+
+async function focusElement(tabId, target, position) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: (locatorSource, playbackTarget, recordedPosition) => {
+        const locate = new Function(`return (${locatorSource});`)();
+        const element = locate(playbackTarget, recordedPosition, 'element');
+        if (!element) {
+          return false;
+        }
+
+        element.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
+        element.focus();
+        return true;
+      },
+      args: [LOCATE_PLAYBACK_ELEMENT_SOURCE, target || {}, position || null]
+    });
+  } catch (error) {
+    console.error('Failed to focus element:', error);
+  }
+}
+
+async function readElementValue(tabId, target, position) {
+  try {
+    const result = await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: (locatorSource, playbackTarget, recordedPosition) => {
+        const locate = new Function(`return (${locatorSource});`)();
+        const element = locate(playbackTarget, recordedPosition, 'element');
+        if (!element) {
+          return null;
+        }
+        return 'value' in element ? element.value : null;
+      },
+      args: [LOCATE_PLAYBACK_ELEMENT_SOURCE, target || {}, position || null]
+    });
+
+    return result[0]?.result ?? null;
+  } catch (error) {
+    console.error('Failed to read element value:', error);
+    return null;
+  }
+}
+
+async function tryNativeMouseMove(tabId, step) {
+  if (!ENABLE_NATIVE_COORDINATE_PLAYBACK) {
+    return false;
+  }
+
+  const available = await ensureNativePlaybackAvailable();
+  if (!available) {
+    return false;
+  }
+
+  const position = await getNativeScreenPositionForStep(tabId, step);
+
+  if (!position) {
+    return false;
+  }
+
+  try {
+    await sendNativeHostMessage({
+      action: 'moveMouseSmooth',
+      x: position.screenX,
+      y: position.screenY,
+      speed: 0.8
+    });
+    return true;
+  } catch (error) {
+    nativePlaybackAvailable = false;
+    console.warn('Native mouse move failed, falling back to DOM playback:', error.message);
+    return false;
+  }
+}
+
+async function tryNativeClick(tabId, step) {
+  if (!ENABLE_NATIVE_COORDINATE_PLAYBACK) {
+    return false;
+  }
+
+  const available = await ensureNativePlaybackAvailable();
+  if (!available) {
+    return false;
+  }
+
+  const position = await getNativeScreenPositionForStep(tabId, step);
+
+  if (!position) {
+    return false;
+  }
+
+  try {
+    await sendNativeHostMessage({
+      action: 'moveMouseSmooth',
+      x: position.screenX,
+      y: position.screenY,
+      speed: 0.8
+    });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    await sendNativeHostMessage({ action: 'mouseClick', button: 'left' });
+    return true;
+  } catch (error) {
+    nativePlaybackAvailable = false;
+    console.warn('Native click failed, falling back to DOM playback:', error.message);
+    return false;
+  }
+}
+
+async function tryNativeFill(tabId, step) {
+  if (!ENABLE_NATIVE_COORDINATE_PLAYBACK) {
+    return false;
+  }
+
+  const available = await ensureNativePlaybackAvailable();
+  if (!available) {
+    return false;
+  }
+
+  const position = await getNativeScreenPositionForStep(tabId, step);
+
+  if (!position) {
+    return false;
+  }
+
+  try {
+    await sendNativeHostMessage({
+      action: 'moveMouseSmooth',
+      x: position.screenX,
+      y: position.screenY,
+      speed: 0.8
+    });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    await sendNativeHostMessage({ action: 'mouseClick', button: 'left' });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    await sendNativeHostMessage({ action: 'keyTap', key: 'a', modifiers: ['control'] });
+    await sendNativeHostMessage({ action: 'keyTap', key: 'backspace' });
+
+    const text = step.data?.value || '';
+    if (text) {
+      await sendNativeHostMessage({ action: 'typeString', text });
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const actualValue = await readElementValue(tabId, step.target || {}, step.data?.position || null);
+    if (actualValue !== text) {
+      console.warn('Native input verification failed, falling back to DOM playback');
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    nativePlaybackAvailable = false;
+    console.warn('Native input failed, falling back to DOM playback:', error.message);
+    return false;
+  }
+}
+
+async function tryNativeKey(tabId, step) {
+  if (!ENABLE_NATIVE_COORDINATE_PLAYBACK) {
+    return false;
+  }
+
+  const available = await ensureNativePlaybackAvailable();
+  if (!available) {
+    return false;
+  }
+
+  try {
+    if (step.target?.selector || step.target?.xpath) {
+      await focusElement(tabId, step.target || {}, step.data?.position || null);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    }
+
+    const key = mapRobotKey(step.data?.key || '');
+    if (!key) {
+      return false;
+    }
+
+    if (key === 'enter') {
+      return false;
+    }
+
+    await sendNativeHostMessage({
+      action: 'keyTap',
+      key,
+      modifiers: getRobotModifiers(step)
+    });
+    return true;
+  } catch (error) {
+    nativePlaybackAvailable = false;
+    console.warn('Native key playback failed, falling back to DOM playback:', error.message);
+    return false;
+  }
+}
+
 async function executeHover(tabId, step) {
   try {
-    const exists = await findElement(tabId, step.target?.selector, step.target?.xpath);
-    if (!exists) {
-      console.warn('Element not found for hover');
+    const nativeMoved = await tryNativeMouseMove(tabId, step);
+    if (nativeMoved) {
+      console.log('Hover executed through native mouse:', step.target?.selector);
       return;
     }
 
-    await chrome.scripting.executeScript({
-      target: { tabId: tabId },
-      func: (sel, xp) => {
-        let element = null;
-        if (sel) element = document.querySelector(sel);
-        if (!element && xp) {
-          const result = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-          element = result.singleNodeValue;
-        }
-        if (!element) return;
-        const rect = element.getBoundingClientRect();
-        const mouseX = rect.left + rect.width / 2;
-        const mouseY = rect.top + rect.height / 2;
-        
-        const mouseOverEvent = new MouseEvent('mouseover', {
-          bubbles: true, cancelable: true, clientX: mouseX, clientY: mouseY
-        });
-        const mouseEnterEvent = new MouseEvent('mouseenter', {
-          bubbles: false, cancelable: true, clientX: mouseX, clientY: mouseY
-        });
-        
-        element.dispatchEvent(mouseOverEvent);
-        element.dispatchEvent(mouseEnterEvent);
-      },
-      args: [step.target?.selector, step.target?.xpath]
+    await chrome.tabs.sendMessage(tabId, {
+      type: 'PLAYBACK_HOVER',
+      target: step.target || {},
+      position: step.data?.position || null
     });
     
     console.log('Hover executed:', step.target?.selector);
@@ -570,75 +1326,22 @@ async function executeHover(tabId, step) {
 
 async function executeClick(tabId, step) {
   try {
-    const selector = step.target?.selector;
-    const xpath = step.target?.xpath;
-    
-    await chrome.scripting.executeScript({
-      target: { tabId: tabId },
-      func: (sel, xp) => {
-        return new Promise((resolve) => {
-          let attempts = 0;
-          const maxAttempts = 5;
-          
-          const tryClick = () => {
-            let element = null;
-            if (sel) {
-              element = document.querySelector(sel);
-            }
-            if (!element && xp) {
-              const result = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-              element = result.singleNodeValue;
-            }
-            
-            if (!element) {
-              attempts++;
-              if (attempts < maxAttempts) {
-                setTimeout(tryClick, 300);
-              } else {
-                console.error('Element not found after', maxAttempts, 'attempts');
-                resolve({ success: false, error: 'Element not found' });
-              }
-              return;
-            }
-            
-            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            
-            requestAnimationFrame(() => {
-              setTimeout(() => {
-                try {
-                  element.focus();
-                  
-                  element.click();
-                  
-                  console.log('Native click() called on:', element.tagName, '- selector:', sel);
-                  
-                  if (element.tagName === 'FORM') {
-                    element.submit();
-                    console.log('Form submitted');
-                  }
-                  
-                  if (element.tagName === 'A') {
-                    console.log('Link clicked, href:', element.href);
-                  }
-                  
-                  resolve({ success: true, tagName: element.tagName, className: element.className });
-                } catch (e) {
-                  console.error('Error executing click:', e);
-                  resolve({ success: false, error: e.message });
-                }
-              }, 200);
-            });
-          };
-          
-          tryClick();
-        });
-      },
-      args: [selector, xpath]
+    const nativeClicked = await tryNativeClick(tabId, step);
+    if (nativeClicked) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      console.log('Click executed through native mouse:', step.target?.selector || step.target?.xpath);
+      return;
+    }
+
+    await chrome.tabs.sendMessage(tabId, {
+      type: 'PLAYBACK_CLICK',
+      target: step.target || {},
+      position: step.data?.position || null
     });
     
     await new Promise(r => setTimeout(r, 500));
     
-    console.log('Click executed on:', selector || xpath);
+    console.log('Click executed on:', step.target?.selector || step.target?.xpath || step.target?.text);
   } catch (error) {
     console.error('Failed to execute click:', error);
   }
@@ -646,31 +1349,18 @@ async function executeClick(tabId, step) {
 
 async function executeFill(tabId, step) {
   try {
-    const exists = await findElement(tabId, step.target?.selector, step.target?.xpath);
-    if (!exists) {
-      console.warn('Element not found for fill');
+    const nativeFilled = await tryNativeFill(tabId, step);
+    if (nativeFilled) {
+      console.log('Fill executed through native keyboard:', step.target?.selector, 'Value:', step.data?.value || '');
       return;
     }
 
     const text = step.data?.value || '';
-    await chrome.scripting.executeScript({
-      target: { tabId: tabId },
-      func: (sel, xp, inputText) => {
-        let element = null;
-        if (sel) element = document.querySelector(sel);
-        if (!element && xp) {
-          const result = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-          element = result.singleNodeValue;
-        }
-        if (!element) return;
-        element.focus();
-        element.value = '';
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        element.value = inputText;
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-      },
-      args: [step.target?.selector, step.target?.xpath, text]
+    await chrome.tabs.sendMessage(tabId, {
+      type: 'PLAYBACK_INPUT',
+      target: step.target || {},
+      position: step.data?.position || null,
+      value: text
     });
 
     console.log('Fill executed:', step.target?.selector, 'Value:', text);
@@ -681,30 +1371,11 @@ async function executeFill(tabId, step) {
 
 async function executeChange(tabId, step) {
   try {
-    await chrome.scripting.executeScript({
-      target: { tabId: tabId },
-      func: (sel, xp, val) => {
-        let element = null;
-        if (sel) element = document.querySelector(sel);
-        if (!element && xp) {
-          const result = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-          element = result.singleNodeValue;
-        }
-        if (!element) return;
-        if (element.tagName === 'SELECT') {
-          element.value = val;
-        } else if (element.type === 'checkbox' || element.type === 'radio') {
-          element.checked = val;
-        } else {
-          element.value = val;
-        }
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-      },
-      args: [
-        step.target?.selector,
-        step.target?.xpath,
-        step.data?.newValue !== undefined ? step.data.newValue : step.data?.value
-      ]
+    await chrome.tabs.sendMessage(tabId, {
+      type: 'PLAYBACK_CHANGE',
+      target: step.target || {},
+      position: step.data?.position || null,
+      value: step.data?.newValue !== undefined ? step.data.newValue : step.data?.value
     });
 
     console.log(
@@ -740,50 +1411,20 @@ async function executeScroll(tabId, step) {
 
 async function executeKey(tabId, step) {
   try {
-    const key = step.data?.key || '';
-    const ctrlKey = step.data?.ctrlKey || false;
-    const altKey = step.data?.altKey || false;
-    const metaKey = step.data?.metaKey || false;
-    const shiftKey = step.data?.shiftKey || false;
-    
-    await chrome.scripting.executeScript({
-      target: { tabId: tabId },
-      func: (k, ctrl, alt, meta, shift) => {
-        const eventOptions = {
-          key: k,
-          code: k === 'Enter' ? 'Enter' : (k === 'Tab' ? 'Tab' : k),
-          keyCode: k === 'Enter' ? 13 : (k === 'Tab' ? 9 : k.charCodeAt(0)),
-          which: k === 'Enter' ? 13 : (k === 'Tab' ? 9 : k.charCodeAt(0)),
-          bubbles: true,
-          cancelable: true,
-          ctrlKey: ctrl,
-          altKey: alt,
-          metaKey: meta,
-          shiftKey: shift
-        };
-        
-        const input = document.activeElement;
-        if (input) {
-          const keydownEvent = new KeyboardEvent('keydown', eventOptions);
-          input.dispatchEvent(keydownEvent);
-          
-          if (k === 'Enter') {
-            const form = input.closest('form');
-            if (form) {
-              form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-            }
-          }
-          
-          const keyupEvent = new KeyboardEvent('keyup', eventOptions);
-          input.dispatchEvent(keyupEvent);
-          
-          console.log('Key event dispatched:', k, 'to element:', input.tagName);
-        }
-      },
-      args: [key, ctrlKey, altKey, metaKey, shiftKey]
+    const nativeKeySent = await tryNativeKey(tabId, step);
+    if (nativeKeySent) {
+      console.log('Key executed through native keyboard:', step.data?.key || '');
+      return;
+    }
+
+    await chrome.tabs.sendMessage(tabId, {
+      type: 'PLAYBACK_KEY',
+      target: step.target || {},
+      position: step.data?.position || null,
+      keyData: step.data || {}
     });
 
-    console.log('Key executed:', key);
+    console.log('Key executed:', step.data?.key || '');
   } catch (error) {
     console.error('Failed to execute key:', error);
   }
@@ -837,6 +1478,7 @@ function handleStopPlayback() {
     playbackData.isPlaying = false;
     playbackData.isPaused = false;
     clearPlaybackTimer();
+    viewportCalibrationCache.clear();
     playbackData.currentStep = 0;
     if (playbackData.port) {
       playbackData.port.postMessage({ type: 'playbackComplete' });
@@ -887,6 +1529,7 @@ function handlePlaybackComplete() {
   playbackData.isPlaying = false;
   playbackData.isPaused = false;
   clearPlaybackTimer();
+  viewportCalibrationCache.clear();
   playbackData.currentStep = 0;
   if (playbackData.port) {
     playbackData.port.postMessage({

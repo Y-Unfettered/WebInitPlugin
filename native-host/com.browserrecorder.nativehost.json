@@ -4,6 +4,6 @@
   "path": "native-host-launcher.bat",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://*"
+    "chrome-extension://fbolclmlfaembkbdmcoolodndpejbbkn/"
   ]
 }

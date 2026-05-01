@@ -11,6 +11,11 @@ const eventTypes = {
   KEY: 'key'
 };
 
+const RECORD_HOVER_EVENTS = false;
+let playbackCursorEl = null;
+let playbackCursorHideTimer = null;
+let lastPointerScreenPosition = null;
+
 let lastUrl = window.location.href;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -29,16 +34,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         resumeListening();
         break;
       case 'PLAYBACK_CLICK':
-        handlePlaybackClick(message.selector, message.xpath, message.position);
+        handlePlaybackClick(message.target || { selector: message.selector, xpath: message.xpath }, message.position);
         break;
       case 'PLAYBACK_INPUT':
-        handlePlaybackInput(message.selector, message.value);
+        handlePlaybackInput(message.target || { selector: message.selector, xpath: message.xpath }, message.value, message.position);
         break;
       case 'PLAYBACK_CHANGE':
-        handlePlaybackChange(message.selector, message.xpath, message.value);
+        handlePlaybackChange(message.target || { selector: message.selector, xpath: message.xpath }, message.value, message.position);
         break;
       case 'PLAYBACK_HOVER':
-        handlePlaybackHover(message.selector, message.xpath, message.position);
+        handlePlaybackHover(message.target || { selector: message.selector, xpath: message.xpath }, message.position);
+        break;
+      case 'PLAYBACK_KEY':
+        handlePlaybackKey(
+          message.target || { selector: message.selector, xpath: message.xpath },
+          message.keyData || {},
+          message.position
+        );
         break;
       default:
         console.warn('Unknown message type:', message.type);
@@ -62,7 +74,9 @@ function startListening() {
   document.addEventListener('click', handleClick, true);
   document.addEventListener('input', handleInput, true);
   document.addEventListener('change', handleChange, true);
-  document.addEventListener('mouseover', handleHover, true);
+  if (RECORD_HOVER_EVENTS) {
+    document.addEventListener('mouseover', handleHover, true);
+  }
   document.addEventListener('keydown', handleKeydown, true);
   window.addEventListener('scroll', handleScroll, { passive: true });
 
@@ -81,7 +95,9 @@ function stopListening() {
   document.removeEventListener('click', handleClick, true);
   document.removeEventListener('input', handleInput, true);
   document.removeEventListener('change', handleChange, true);
-  document.removeEventListener('mouseover', handleHover, true);
+  if (RECORD_HOVER_EVENTS) {
+    document.removeEventListener('mouseover', handleHover, true);
+  }
   document.removeEventListener('keydown', handleKeydown, true);
   window.removeEventListener('scroll', handleScroll);
 
@@ -115,6 +131,8 @@ function handleClick(event) {
       }
     }
     
+    const screenPosition = buildEventScreenPosition(event);
+    lastPointerScreenPosition = screenPosition;
     const eventData = {
       eventType: eventTypes.CLICK,
       element: {
@@ -124,6 +142,9 @@ function handleClick(event) {
         name: clickableElement.name || null,
         type: clickableElement.type || null,
         value: clickableElement.value || null,
+        href: clickableElement.href || clickableElement.getAttribute('href') || null,
+        ariaLabel: clickableElement.getAttribute('aria-label') || null,
+        role: clickableElement.getAttribute('role') || null,
         textContent: clickableElement.textContent ? clickableElement.textContent.trim().substring(0, 100) : null
       },
       locator: {
@@ -135,6 +156,8 @@ function handleClick(event) {
         x: event.clientX,
         y: event.clientY
       },
+      screenPosition: screenPosition,
+      viewportContext: buildViewportContext(),
       url: window.location.href
     };
 
@@ -145,11 +168,16 @@ function handleClick(event) {
 }
 
 function handleHover(event) {
+  if (!RECORD_HOVER_EVENTS) {
+    return;
+  }
   if (!isListening || isPaused) {
     return;
   }
   try {
     const target = event.target;
+    const screenPosition = buildEventScreenPosition(event);
+    lastPointerScreenPosition = screenPosition;
     const eventData = {
       eventType: eventTypes.HOVER,
       element: {
@@ -158,6 +186,9 @@ function handleHover(event) {
         className: target.className || null,
         name: target.name || null,
         type: target.type || null,
+        href: target.href || target.getAttribute?.('href') || null,
+        ariaLabel: target.getAttribute('aria-label') || null,
+        role: target.getAttribute('role') || null,
         textContent: target.textContent ? target.textContent.trim().substring(0, 100) : null
       },
       locator: {
@@ -169,6 +200,8 @@ function handleHover(event) {
         x: event.clientX,
         y: event.clientY
       },
+      screenPosition: screenPosition,
+      viewportContext: buildViewportContext(),
       url: window.location.href
     };
 
@@ -184,6 +217,7 @@ function handleInput(event) {
   }
   try {
     const target = event.target;
+    const elementPosition = buildElementPosition(target);
     const eventData = {
       eventType: eventTypes.INPUT,
       element: {
@@ -191,13 +225,19 @@ function handleInput(event) {
         id: target.id || null,
         className: target.className || null,
         name: target.name || null,
-        type: target.type || null
+        type: target.type || null,
+        href: target.href || target.getAttribute?.('href') || null,
+        ariaLabel: target.getAttribute('aria-label') || null,
+        role: target.getAttribute('role') || null
       },
       locator: {
         cssSelector: generateCSSSelector(target),
         xpath: generateXPath(target),
         accessibleName: target.getAttribute('aria-label') || target.getAttribute('name') || null
       },
+      position: elementPosition,
+      screenPosition: lastPointerScreenPosition || (elementPosition ? buildScreenPositionFromViewportPoint(elementPosition.x, elementPosition.y) : null),
+      viewportContext: buildViewportContext(),
       inputValue: target.value || '',
       url: window.location.href
     };
@@ -215,6 +255,7 @@ function handleChange(event) {
   try {
     const target = event.target;
     let newValue = null;
+    const elementPosition = buildElementPosition(target);
 
     if (target.tagName === 'SELECT') {
       newValue = target.value;
@@ -231,13 +272,19 @@ function handleChange(event) {
         id: target.id || null,
         className: target.className || null,
         name: target.name || null,
-        type: target.type || null
+        type: target.type || null,
+        href: target.href || target.getAttribute?.('href') || null,
+        ariaLabel: target.getAttribute('aria-label') || null,
+        role: target.getAttribute('role') || null
       },
       locator: {
         cssSelector: generateCSSSelector(target),
         xpath: generateXPath(target),
         accessibleName: target.getAttribute('aria-label') || target.getAttribute('name') || null
       },
+      position: elementPosition,
+      screenPosition: lastPointerScreenPosition || (elementPosition ? buildScreenPositionFromViewportPoint(elementPosition.x, elementPosition.y) : null),
+      viewportContext: buildViewportContext(),
       newValue: newValue,
       url: window.location.href
     };
@@ -259,6 +306,7 @@ function handleKeydown(event) {
   if (specialKeys.includes(key) || event.ctrlKey || event.altKey || event.metaKey) {
     try {
       const target = event.target;
+      const elementPosition = buildElementPosition(target);
       const eventData = {
         eventType: eventTypes.KEY,
         element: {
@@ -266,13 +314,19 @@ function handleKeydown(event) {
           id: target.id || null,
           className: target.className || null,
           name: target.name || null,
-          type: target.type || null
+          type: target.type || null,
+          href: target.href || target.getAttribute?.('href') || null,
+          ariaLabel: target.getAttribute('aria-label') || null,
+          role: target.getAttribute('role') || null
         },
         locator: {
           cssSelector: generateCSSSelector(target),
           xpath: generateXPath(target),
           accessibleName: target.getAttribute('aria-label') || target.getAttribute('name') || null
         },
+        position: elementPosition,
+        screenPosition: lastPointerScreenPosition || (elementPosition ? buildScreenPositionFromViewportPoint(elementPosition.x, elementPosition.y) : null),
+        viewportContext: buildViewportContext(),
         keyData: {
           key: key,
           code: event.code,
@@ -357,6 +411,32 @@ function generateCSSSelector(element) {
       const idSelector = `#${CSS.escape(element.id)}`;
       if (document.querySelectorAll(idSelector).length === 1) {
         return idSelector;
+      }
+    }
+
+    if (element.tagName === 'A') {
+      const href = element.getAttribute('href');
+      if (href) {
+        const hrefSelector = `a[href="${CSS.escape(href)}"]`;
+        if (document.querySelectorAll(hrefSelector).length === 1) {
+          return hrefSelector;
+        }
+      }
+    }
+
+    const ariaLabel = element.getAttribute('aria-label');
+    if (ariaLabel) {
+      const ariaSelector = `${element.tagName.toLowerCase()}[aria-label="${CSS.escape(ariaLabel)}"]`;
+      if (document.querySelectorAll(ariaSelector).length === 1) {
+        return ariaSelector;
+      }
+    }
+
+    const nameAttr = element.getAttribute('name');
+    if (nameAttr) {
+      const nameSelector = `${element.tagName.toLowerCase()}[name="${CSS.escape(nameAttr)}"]`;
+      if (document.querySelectorAll(nameSelector).length === 1) {
+        return nameSelector;
       }
     }
 
@@ -474,6 +554,9 @@ function generateXPath(element) {
 
 function findElementBySelector(selector) {
   try {
+    if (!selector) {
+      return null;
+    }
     if (selector.startsWith('/')) {
       const result = document.evaluate(selector, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
       return result.singleNodeValue;
@@ -486,11 +569,143 @@ function findElementBySelector(selector) {
   }
 }
 
-async function handlePlaybackHover(selector, xpath, position) {
+function locatePlaybackElement(target, position) {
+  const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const selector = target?.selector || '';
+  const xpath = target?.xpath || '';
+  const expectedText = normalize(target?.text);
+  const expectedAccessibleName = normalize(target?.accessibleName || target?.attributes?.ariaLabel);
+  const expectedHref = target?.attributes?.href || '';
+  const expectedId = target?.attributes?.id || '';
+  const expectedName = target?.attributes?.name || '';
+  const expectedType = target?.attributes?.type || '';
+  const expectedRole = target?.attributes?.role || '';
+  const expectedTag = String(target?.tagName || '').toUpperCase();
+
+  const addCandidate = (list, element, source) => {
+    if (!element || list.some((entry) => entry.element === element)) {
+      return;
+    }
+    list.push({ element, source });
+  };
+
+  const candidates = [];
+
+  if (selector) {
+    try {
+      document.querySelectorAll(selector).forEach((element) => addCandidate(candidates, element, 'selector'));
+    } catch (error) {
+      console.warn('Selector lookup failed in content script:', error);
+    }
+  }
+
+  if (xpath) {
+    try {
+      const snapshot = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      for (let i = 0; i < snapshot.snapshotLength; i++) {
+        const node = snapshot.snapshotItem(i);
+        if (node?.nodeType === Node.ELEMENT_NODE) {
+          addCandidate(candidates, node, 'xpath');
+        }
+      }
+    } catch (error) {
+      console.warn('XPath lookup failed in content script:', error);
+    }
+  }
+
+  if (expectedId) {
+    addCandidate(candidates, document.getElementById(expectedId), 'id');
+  }
+
+  if (expectedHref) {
+    document.querySelectorAll('a[href]').forEach((element) => {
+      if (element.href === expectedHref || element.getAttribute('href') === expectedHref) {
+        addCandidate(candidates, element, 'href');
+      }
+    });
+  }
+
+  if (expectedAccessibleName) {
+    document.querySelectorAll('[aria-label]').forEach((element) => {
+      if (normalize(element.getAttribute('aria-label')) === expectedAccessibleName) {
+        addCandidate(candidates, element, 'aria');
+      }
+    });
+  }
+
+  if (expectedName) {
+    document.querySelectorAll(`[name="${CSS.escape(expectedName)}"]`).forEach((element) => addCandidate(candidates, element, 'name'));
+  }
+
+  if (expectedText) {
+    const textSelector = expectedTag ? expectedTag.toLowerCase() : 'a,button,[role="button"],li,span,div';
+    document.querySelectorAll(textSelector).forEach((element) => {
+      if (normalize(element.textContent) === expectedText) {
+        addCandidate(candidates, element, 'text');
+      }
+    });
+  }
+
+  let best = null;
+  for (const candidate of candidates) {
+    const element = candidate.element;
+    const rect = element.getBoundingClientRect();
+    const text = normalize(element.textContent);
+    const ariaLabel = normalize(element.getAttribute('aria-label'));
+    const href = element.href || element.getAttribute('href') || '';
+    let score = 0;
+
+    if (candidate.source === 'selector') score += 80;
+    if (candidate.source === 'xpath') score += 70;
+    if (candidate.source === 'id') score += 120;
+    if (candidate.source === 'href') score += 160;
+    if (candidate.source === 'aria') score += 140;
+    if (candidate.source === 'name') score += 110;
+    if (candidate.source === 'text') score += 130;
+    if (expectedTag && element.tagName === expectedTag) score += 50;
+    if (expectedType && String(element.type || '') === expectedType) score += 30;
+    if (expectedRole && String(element.getAttribute('role') || '') === expectedRole) score += 25;
+    if (expectedText && text === expectedText) score += 180;
+    if (expectedAccessibleName && ariaLabel === expectedAccessibleName) score += 120;
+    if (expectedHref && href === expectedHref) score += 220;
+    if (expectedId && element.id === expectedId) score += 120;
+    if (expectedName && element.getAttribute('name') === expectedName) score += 70;
+
+    if (position && typeof position.x === 'number' && typeof position.y === 'number') {
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      score -= Math.min(Math.hypot(centerX - position.x, centerY - position.y), 400);
+    }
+
+    if (rect.width <= 0 || rect.height <= 0) {
+      score -= 200;
+    }
+
+    if (!best || score > best.score) {
+      best = { element, score };
+    }
+  }
+
+  return best && best.score >= 0 ? best.element : null;
+}
+
+async function waitForPlaybackTarget(target, position, timeout = 3000) {
+  const startTime = Date.now();
+  while (Date.now() - startTime < timeout) {
+    const element = locatePlaybackElement(target, position);
+    if (element) {
+      return element;
+    }
+    await delay(100);
+  }
+  return null;
+}
+
+async function handlePlaybackHover(target, position) {
   try {
-    const element = await waitForElement(selector, xpath, 3000);
+    const element = await waitForPlaybackTarget(target, position, 3000);
     if (!element) {
-      console.warn('Element not found for playback hover:', selector, xpath);
+      console.warn('Element not found for playback hover:', target);
       return;
     }
 
@@ -506,17 +721,17 @@ async function handlePlaybackHover(selector, xpath, position) {
     await simulateMouseOver(element, clientX, clientY);
     await delay(200);
 
-    console.log('Playback hover executed on:', selector);
+    console.log('Playback hover executed on:', target?.selector || target?.xpath || target?.text);
   } catch (error) {
     console.error('Error executing playback hover:', error);
   }
 }
 
-async function handlePlaybackClick(selector, xpath, position) {
+async function handlePlaybackClick(target, position) {
   try {
-    const element = await waitForElement(selector, xpath, 3000);
+    const element = await waitForPlaybackTarget(target, position, 3000);
     if (!element) {
-      console.warn('Element not found for playback click:', selector, xpath);
+      console.warn('Element not found for playback click:', target);
       return;
     }
 
@@ -538,46 +753,37 @@ async function handlePlaybackClick(selector, xpath, position) {
     await simulateMouseUp(element, clientX, clientY);
     await delay(50);
 
-    console.log('Playback click executed on:', selector);
+    console.log('Playback click executed on:', target?.selector || target?.xpath || target?.text);
   } catch (error) {
     console.error('Error executing playback click:', error);
   }
 }
 
-async function handlePlaybackInput(selector, value) {
+async function handlePlaybackInput(target, value, position) {
   try {
-    const element = await waitForElement(selector, null, 3000);
+    const element = await waitForPlaybackTarget(target, position, 3000);
     if (!element) {
-      console.warn('Element not found for playback input:', selector);
+      console.warn('Element not found for playback input:', target);
       return;
     }
 
     element.focus();
     await delay(100);
 
-    element.value = '';
+    applyInputValue(element, value);
     await delay(50);
 
-    for (let i = 0; i < value.length; i++) {
-      const char = value[i];
-      await simulateKeyPress(char);
-      await delay(50 + Math.random() * 50);
-    }
-
-    element.dispatchEvent(new Event('input', { bubbles: true }));
-    element.dispatchEvent(new Event('change', { bubbles: true }));
-
-    console.log('Playback input executed on:', selector, 'value:', value);
+    console.log('Playback input executed on:', target?.selector || target?.xpath || target?.text, 'value:', value);
   } catch (error) {
     console.error('Error executing playback input:', error);
   }
 }
 
-async function handlePlaybackChange(selector, xpath, value) {
+async function handlePlaybackChange(target, value, position) {
   try {
-    const element = await waitForElement(selector, xpath, 3000);
+    const element = await waitForPlaybackTarget(target, position, 3000);
     if (!element) {
-      console.warn('Element not found for playback change:', selector, xpath);
+      console.warn('Element not found for playback change:', target);
       return;
     }
 
@@ -592,9 +798,60 @@ async function handlePlaybackChange(selector, xpath, value) {
     }
 
     element.dispatchEvent(new Event('change', { bubbles: true }));
-    console.log('Playback change executed on:', selector, 'value:', value);
+    console.log('Playback change executed on:', target?.selector || target?.xpath || target?.text, 'value:', value);
   } catch (error) {
     console.error('Error executing playback change:', error);
+  }
+}
+
+async function handlePlaybackKey(target, keyData, position) {
+  try {
+    const element = target ? await waitForPlaybackTarget(target, position, 3000) : document.activeElement;
+    const targetElement = element || document.activeElement || document.body;
+    if (!targetElement) {
+      console.warn('Element not found for playback key:', target);
+      return;
+    }
+
+    targetElement.focus?.();
+    await delay(30);
+
+    const key = keyData?.key || '';
+    const code = keyData?.code || key;
+    const keyCode = resolveKeyCode(key);
+    const eventInit = {
+      key,
+      code,
+      keyCode,
+      which: keyCode,
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: !!keyData?.ctrlKey,
+      altKey: !!keyData?.altKey,
+      metaKey: !!keyData?.metaKey,
+      shiftKey: !!keyData?.shiftKey
+    };
+
+    targetElement.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+    if (key.length === 1 || key === 'Enter') {
+      targetElement.dispatchEvent(new KeyboardEvent('keypress', eventInit));
+    }
+    targetElement.dispatchEvent(new KeyboardEvent('keyup', eventInit));
+
+    if (key === 'Enter') {
+      const form = targetElement.closest?.('form');
+      if (form) {
+        if (typeof form.requestSubmit === 'function') {
+          form.requestSubmit();
+        } else {
+          form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        }
+      }
+    }
+
+    console.log('Playback key executed on:', target?.selector || target?.xpath || target?.text, key);
+  } catch (error) {
+    console.error('Error executing playback key:', error);
   }
 }
 
@@ -614,8 +871,157 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function buildEventScreenPosition(event) {
+  if (typeof event?.screenX !== 'number' || typeof event?.screenY !== 'number') {
+    return null;
+  }
+
+  return {
+    x: Math.round(event.screenX),
+    y: Math.round(event.screenY)
+  };
+}
+
+function buildElementPosition(element) {
+  if (!element || typeof element.getBoundingClientRect !== 'function') {
+    return null;
+  }
+
+  const rect = element.getBoundingClientRect();
+  if (!rect || rect.width <= 0 || rect.height <= 0) {
+    return null;
+  }
+
+  return {
+    x: Math.round(rect.left + rect.width / 2),
+    y: Math.round(rect.top + rect.height / 2)
+  };
+}
+
+function buildScreenPositionFromViewportPoint(clientX, clientY) {
+  if (typeof clientX !== 'number' || typeof clientY !== 'number') {
+    return null;
+  }
+
+  return {
+    x: Math.round(window.screenX + clientX),
+    y: Math.round(window.screenY + clientY)
+  };
+}
+
+function buildViewportContext() {
+  return {
+    screenX: window.screenX,
+    screenY: window.screenY,
+    outerWidth: window.outerWidth,
+    outerHeight: window.outerHeight,
+    innerWidth: window.innerWidth,
+    innerHeight: window.innerHeight,
+    devicePixelRatio: window.devicePixelRatio || 1,
+    visualViewportOffsetLeft: window.visualViewport?.offsetLeft || 0,
+    visualViewportOffsetTop: window.visualViewport?.offsetTop || 0
+  };
+}
+
+function ensurePlaybackCursor() {
+  if (playbackCursorEl && document.body.contains(playbackCursorEl)) {
+    return playbackCursorEl;
+  }
+
+  playbackCursorEl = document.createElement('div');
+  playbackCursorEl.id = 'browser-recorder-playback-cursor';
+  playbackCursorEl.style.position = 'fixed';
+  playbackCursorEl.style.left = '0';
+  playbackCursorEl.style.top = '0';
+  playbackCursorEl.style.width = '18px';
+  playbackCursorEl.style.height = '18px';
+  playbackCursorEl.style.borderRadius = '50%';
+  playbackCursorEl.style.background = 'rgba(37, 99, 235, 0.85)';
+  playbackCursorEl.style.border = '2px solid #ffffff';
+  playbackCursorEl.style.boxShadow = '0 0 0 6px rgba(37, 99, 235, 0.18)';
+  playbackCursorEl.style.transform = 'translate(-50%, -50%)';
+  playbackCursorEl.style.pointerEvents = 'none';
+  playbackCursorEl.style.zIndex = '2147483647';
+  playbackCursorEl.style.transition = 'left 120ms linear, top 120ms linear, transform 80ms ease, opacity 120ms ease';
+  playbackCursorEl.style.opacity = '0';
+  document.documentElement.appendChild(playbackCursorEl);
+  return playbackCursorEl;
+}
+
+function showPlaybackCursor(clientX, clientY, pressed = false) {
+  const cursor = ensurePlaybackCursor();
+  cursor.style.left = `${clientX}px`;
+  cursor.style.top = `${clientY}px`;
+  cursor.style.opacity = '1';
+  cursor.style.transform = pressed ? 'translate(-50%, -50%) scale(0.82)' : 'translate(-50%, -50%) scale(1)';
+
+  if (playbackCursorHideTimer) {
+    clearTimeout(playbackCursorHideTimer);
+  }
+  playbackCursorHideTimer = setTimeout(() => {
+    hidePlaybackCursor();
+  }, 1600);
+}
+
+function hidePlaybackCursor() {
+  if (!playbackCursorEl) {
+    return;
+  }
+  playbackCursorEl.style.opacity = '0';
+  playbackCursorEl.style.transform = 'translate(-50%, -50%) scale(1)';
+}
+
+function applyInputValue(element, value) {
+  const prototype = element.tagName === 'TEXTAREA'
+    ? HTMLTextAreaElement.prototype
+    : HTMLInputElement.prototype;
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+  if (descriptor?.set) {
+    descriptor.set.call(element, value);
+  } else {
+    element.value = value;
+  }
+
+  element.dispatchEvent(new InputEvent('input', {
+    bubbles: true,
+    cancelable: true,
+    data: value,
+    inputType: 'insertText'
+  }));
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function resolveKeyCode(key) {
+  const keyMap = {
+    Enter: 13,
+    Tab: 9,
+    Escape: 27,
+    Backspace: 8,
+    Delete: 46,
+    ArrowUp: 38,
+    ArrowDown: 40,
+    ArrowLeft: 37,
+    ArrowRight: 39,
+    Home: 36,
+    End: 35,
+    PageUp: 33,
+    PageDown: 34
+  };
+
+  if (keyMap[key]) {
+    return keyMap[key];
+  }
+
+  if (key && key.length === 1) {
+    return key.toUpperCase().charCodeAt(0);
+  }
+
+  return 0;
+}
+
 function simulateMouseMove(clientX, clientY) {
   return new Promise(resolve => {
+    showPlaybackCursor(clientX, clientY, false);
     const event = new PointerEvent('pointermove', {
       bubbles: true,
       cancelable: true,
@@ -663,6 +1069,7 @@ function simulateMouseOver(element, clientX, clientY) {
 
 function simulateMouseDown(element, clientX, clientY) {
   return new Promise(resolve => {
+    showPlaybackCursor(clientX, clientY, true);
     const event = new PointerEvent('pointerdown', {
       bubbles: true,
       cancelable: true,
@@ -691,6 +1098,7 @@ function simulateMouseDown(element, clientX, clientY) {
 
 function simulateMouseUp(element, clientX, clientY) {
   return new Promise(resolve => {
+    showPlaybackCursor(clientX, clientY, false);
     const event = new PointerEvent('pointerup', {
       bubbles: true,
       cancelable: true,

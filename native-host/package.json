@@ -1,15 +1,13 @@
 {
   "name": "browser-recorder-native-host",
   "version": "1.0.0",
-  "description": "Native host for Browser Operation Recorder to control real system cursor",
-  "main": "native-host.js",
+  "description": "Native host for Browser Operation Recorder using Windows SendInput",
+  "main": "native-host.ps1",
   "scripts": {
-    "start": "node native-host.js"
+    "start": "powershell -NoProfile -ExecutionPolicy Bypass -File native-host.ps1"
   },
-  "dependencies": {
-    "@jitsi/robotjs": "^0.6.22"
-  },
-  "keywords": ["chrome-extension", "native-messaging", "robotjs"],
+  "dependencies": {},
+  "keywords": ["chrome-extension", "native-messaging", "sendinput", "powershell"],
   "author": "",
   "license": "MIT"
 }

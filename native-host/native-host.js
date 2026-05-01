@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 
-const fs = require('fs');
-const path = require('path');
-
 try {
     const robot = require('@jitsi/robotjs');
+    robot.setMouseDelay(20);
+    robot.setKeyboardDelay(20);
 
     let inputBuffer = Buffer.alloc(0);
 
@@ -35,19 +34,38 @@ try {
         try {
             const action = message.action;
             let result = { success: true };
+            const modifiers = normalizeModifiers(message.modifiers);
 
             switch (action) {
+                case 'ping':
+                    result.host = 'com.browserrecorder.nativehost';
+                    break;
                 case 'moveMouse':
                     robot.moveMouse(message.x, message.y);
                     break;
                 case 'moveMouseSmooth':
-                    robot.moveMouseSmooth(message.x, message.y);
+                    robot.moveMouseSmooth(message.x, message.y, message.speed);
                     break;
                 case 'mouseClick':
                     robot.mouseClick(message.button || 'left', message.double || false);
                     break;
                 case 'mouseToggle':
                     robot.mouseToggle(message.down || 'down', message.button || 'left');
+                    break;
+                case 'scrollMouse':
+                    robot.scrollMouse(message.x || 0, message.y || 0);
+                    break;
+                case 'setMouseDelay':
+                    robot.setMouseDelay(message.ms || 0);
+                    break;
+                case 'setKeyboardDelay':
+                    robot.setKeyboardDelay(message.ms || 0);
+                    break;
+                case 'keyTap':
+                    robot.keyTap(message.key, modifiers);
+                    break;
+                case 'keyToggle':
+                    robot.keyToggle(message.key, message.down || 'down', modifiers);
                     break;
                 case 'typeString':
                     robot.typeString(message.text);
@@ -67,6 +85,16 @@ try {
         } catch (e) {
             sendResponse({ success: false, error: e.message });
         }
+    }
+
+    function normalizeModifiers(modifiers) {
+        if (!modifiers) {
+            return undefined;
+        }
+        if (Array.isArray(modifiers)) {
+            return modifiers.length > 0 ? modifiers : undefined;
+        }
+        return modifiers;
     }
 
     function sendResponse(data) {
