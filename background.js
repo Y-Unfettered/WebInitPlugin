@@ -130,7 +130,7 @@ function handleSidebarMessage(message, port) {
       handleStartPlayback(message.operations, port);
       break;
     case 'stepOver':
-      handleStepOver(port);
+      handleStepOver(message.operations, port);
       break;
     case 'stopPlayback':
       handleStopPlayback();
@@ -271,6 +271,9 @@ async function handleRecordEvent(eventData) {
 
     if (eventData.eventType === 'input') {
       operation.data.value = eventData.inputValue || '';
+    } else if (eventData.eventType === 'change') {
+      operation.data.newValue = eventData.newValue;
+      operation.data.value = eventData.newValue;
     } else if (eventData.eventType === 'navigate') {
       operation.data.url = eventData.url;
     } else if (eventData.eventType === 'scroll') {
@@ -398,34 +401,39 @@ let playbackData = {
   operations: [],
   currentStep: 0,
   isPlaying: false,
+  isPaused: false,
   intervalId: null,
-  port: null
+  port: null,
+  tabId: null
 };
 
 async function handleStartPlayback(operations, port) {
   try {
+    clearPlaybackTimer();
     playbackData.operations = operations;
     playbackData.currentStep = 0;
     playbackData.isPlaying = true;
+    playbackData.isPaused = false;
     playbackData.port = port;
+    playbackData.tabId = await getCurrentTabId();
 
     if (operations.length === 0) {
       return;
     }
 
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) {
+    const tabId = await getPlaybackTabId();
+    if (!tabId) {
       console.error('No active tab found for playback');
       return;
     }
 
-    await executeStep(tab.id, 0);
+    await executeStep(tabId, 0, true);
   } catch (error) {
     console.error('Failed to start playback:', error);
   }
 }
 
-async function executeStep(tabId, stepIndex) {
+async function executeStep(tabId, stepIndex, scheduleNext = true) {
   try {
     const step = playbackData.operations[stepIndex];
     if (!step) {
@@ -468,16 +476,30 @@ async function executeStep(tabId, stepIndex) {
       delayMs = 1000;
     }
 
-    if (playbackData.isPlaying) {
+    playbackData.currentStep = stepIndex + 1;
+
+    if (playbackData.currentStep >= playbackData.operations.length) {
+      handlePlaybackComplete();
+      return;
+    }
+
+    if (scheduleNext && playbackData.isPlaying && !playbackData.isPaused) {
       playbackData.intervalId = setTimeout(async () => {
-        await executeStep(tabId, stepIndex + 1);
+        await executeStep(tabId, playbackData.currentStep, true);
       }, delayMs);
     }
   } catch (error) {
     console.error('Failed to execute step:', error);
-    if (playbackData.isPlaying) {
+    playbackData.currentStep = stepIndex + 1;
+
+    if (playbackData.currentStep >= playbackData.operations.length) {
+      handlePlaybackComplete();
+      return;
+    }
+
+    if (scheduleNext && playbackData.isPlaying && !playbackData.isPaused) {
       playbackData.intervalId = setTimeout(async () => {
-        await executeStep(tabId, stepIndex + 1);
+        await executeStep(tabId, playbackData.currentStep, true);
       }, 1000);
     }
   }
@@ -678,10 +700,19 @@ async function executeChange(tabId, step) {
         }
         element.dispatchEvent(new Event('change', { bubbles: true }));
       },
-      args: [step.target?.selector, step.target?.xpath, step.data?.newValue]
+      args: [
+        step.target?.selector,
+        step.target?.xpath,
+        step.data?.newValue !== undefined ? step.data.newValue : step.data?.value
+      ]
     });
 
-    console.log('Change executed:', step.target?.selector, 'Value:', step.data?.newValue);
+    console.log(
+      'Change executed:',
+      step.target?.selector,
+      'Value:',
+      step.data?.newValue !== undefined ? step.data.newValue : step.data?.value
+    );
   } catch (error) {
     console.error('Failed to execute change:', error);
   }
@@ -758,22 +789,44 @@ async function executeKey(tabId, step) {
   }
 }
 
-async function handleStepOver(port) {
+async function handleStepOver(operations, port) {
   try {
+    if (Array.isArray(operations) && operations.length > 0) {
+      playbackData.operations = operations;
+    }
+    clearPlaybackTimer();
     playbackData.port = port;
+    playbackData.isPlaying = false;
+    playbackData.isPaused = true;
+    if (playbackData.currentStep === 0) {
+      playbackData.tabId = await getCurrentTabId();
+    }
 
     if (playbackData.currentStep >= playbackData.operations.length) {
       handlePlaybackComplete();
       return;
     }
 
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) {
+    const tabId = await getPlaybackTabId();
+    if (!tabId) {
       console.error('No active tab found for step over');
       return;
     }
 
-    await executeStep(tab.id, playbackData.currentStep);
+    await executeStep(tabId, playbackData.currentStep, false);
+
+    if (playbackData.currentStep >= playbackData.operations.length) {
+      handlePlaybackComplete();
+      return;
+    }
+
+    if (playbackData.port) {
+      playbackData.port.postMessage({
+        type: 'playbackPaused',
+        step: playbackData.currentStep,
+        total: playbackData.operations.length
+      });
+    }
   } catch (error) {
     console.error('Failed to step over:', error);
   }
@@ -782,10 +835,8 @@ async function handleStepOver(port) {
 function handleStopPlayback() {
   try {
     playbackData.isPlaying = false;
-    if (playbackData.intervalId) {
-      clearTimeout(playbackData.intervalId);
-      playbackData.intervalId = null;
-    }
+    playbackData.isPaused = false;
+    clearPlaybackTimer();
     playbackData.currentStep = 0;
     if (playbackData.port) {
       playbackData.port.postMessage({ type: 'playbackComplete' });
@@ -799,10 +850,8 @@ function handleStopPlayback() {
 function handlePausePlayback() {
   try {
     playbackData.isPlaying = false;
-    if (playbackData.intervalId) {
-      clearTimeout(playbackData.intervalId);
-      playbackData.intervalId = null;
-    }
+    playbackData.isPaused = true;
+    clearPlaybackTimer();
     if (playbackData.port) {
       playbackData.port.postMessage({ type: 'playbackPaused', step: playbackData.currentStep });
     }
@@ -818,12 +867,13 @@ async function handleResumePlayback() {
       return;
     }
     playbackData.isPlaying = true;
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) {
+    playbackData.isPaused = false;
+    const tabId = await getPlaybackTabId();
+    if (!tabId) {
       console.error('No active tab found for playback');
       return;
     }
-    executeStep(tab.id, playbackData.currentStep);
+    executeStep(tabId, playbackData.currentStep, true);
     if (playbackData.port) {
       playbackData.port.postMessage({ type: 'playbackResumed', step: playbackData.currentStep });
     }
@@ -835,16 +885,36 @@ async function handleResumePlayback() {
 
 function handlePlaybackComplete() {
   playbackData.isPlaying = false;
-  if (playbackData.intervalId) {
-    clearTimeout(playbackData.intervalId);
-    playbackData.intervalId = null;
-  }
+  playbackData.isPaused = false;
+  clearPlaybackTimer();
   playbackData.currentStep = 0;
   if (playbackData.port) {
     playbackData.port.postMessage({
       type: 'playbackComplete'
     });
   }
+}
+
+function clearPlaybackTimer() {
+  if (playbackData.intervalId) {
+    clearTimeout(playbackData.intervalId);
+    playbackData.intervalId = null;
+  }
+}
+
+async function getPlaybackTabId() {
+  if (playbackData.tabId) {
+    try {
+      await chrome.tabs.get(playbackData.tabId);
+      return playbackData.tabId;
+    } catch (error) {
+      playbackData.tabId = null;
+    }
+  }
+
+  const tabId = await getCurrentTabId();
+  playbackData.tabId = tabId;
+  return tabId;
 }
 
 if (chrome.sidePanel) {

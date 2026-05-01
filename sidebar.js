@@ -2,6 +2,7 @@
   const ICON_SVGS = {
     click: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5"/></svg>',
     input: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
+    change: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>',
     navigate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>',
     scroll: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>',
     wait: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>',
@@ -18,6 +19,8 @@
     hover: '悬停',
     key: '按键'
   };
+
+  TYPE_NAMES.change = 'change';
 
   let port = null;
   let recordingState = 'idle';
@@ -99,10 +102,16 @@
       case 'playbackPaused':
         isPausedPlayback = true;
         updatePlaybackButtonState(true);
+        if (elements.btnStepOver) {
+          elements.btnStepOver.disabled = false;
+        }
         break;
       case 'playbackResumed':
         isPausedPlayback = false;
         updatePlaybackButtonState(false);
+        if (elements.btnStepOver) {
+          elements.btnStepOver.disabled = true;
+        }
         break;
     }
   }
@@ -124,7 +133,10 @@
       elements.btnExport.addEventListener('click', () => exportJSON());
     }
     if (elements.btnPlayback) {
-      elements.btnPlayback.addEventListener('click', () => togglePlayback());
+      elements.btnPlayback.addEventListener('click', () => {
+        console.log('btnPlayback clicked');
+        togglePlayback();
+      });
     }
     if (elements.btnStopPlayback) {
       elements.btnStopPlayback.addEventListener('click', () => stopPlayback());
@@ -152,20 +164,44 @@
 
   function updatePlaybackButtonState(isPaused) {
     const btn = elements.btnPlayback;
-    if (!btn) return;
+    if (!btn) {
+      console.log('btnPlayback not found');
+      return;
+    }
 
     const playIcon = btn.querySelector('.btn-icon-play');
     const pauseIcon = btn.querySelector('.btn-icon-pause');
     const btnText = btn.querySelector('.btn-text');
 
+    console.log('updatePlaybackButtonState called, isPaused:', isPaused);
+    console.log('playIcon:', playIcon, 'pauseIcon:', pauseIcon, 'btnText:', btnText);
+
     if (isPaused) {
-      if (playIcon) playIcon.style.display = 'block';
-      if (pauseIcon) pauseIcon.style.display = 'none';
-      if (btnText) btnText.textContent = '继续';
+      if (playIcon) {
+        playIcon.style.display = 'flex';
+        console.log('Set playIcon to flex');
+      }
+      if (pauseIcon) {
+        pauseIcon.style.display = 'none';
+        console.log('Set pauseIcon to none');
+      }
+      if (btnText) {
+        btnText.textContent = '继续';
+        console.log('Set btnText to 继续');
+      }
     } else {
-      if (playIcon) playIcon.style.display = 'none';
-      if (pauseIcon) pauseIcon.style.display = 'block';
-      if (btnText) btnText.textContent = '暂停';
+      if (playIcon) {
+        playIcon.style.display = 'none';
+        console.log('Set playIcon to none');
+      }
+      if (pauseIcon) {
+        pauseIcon.style.display = 'flex';
+        console.log('Set pauseIcon to flex');
+      }
+      if (btnText) {
+        btnText.textContent = '暂停';
+        console.log('Set btnText to 暂停');
+      }
     }
   }
 
@@ -309,6 +345,8 @@
         return op.target?.selector || op.target?.text || '点击元素';
       case 'input':
         return op.target?.selector || '输入框';
+      case 'change':
+        return op.target?.selector || `change: ${String(op.data?.newValue !== undefined ? op.data.newValue : op.data?.value ?? '')}`;
       case 'navigate':
         return op.data?.url || '页面导航';
       case 'scroll':
@@ -448,6 +486,9 @@
       if (op.data.value) {
         html += createDetailRow('输入值', op.data.value);
       }
+      if (op.data.newValue !== undefined) {
+        html += createDetailRow('New Value', String(op.data.newValue));
+      }
       if (op.data.url) {
         html += createDetailRow('目标 URL', op.data.url);
       }
@@ -517,9 +558,14 @@
   }
 
   function togglePlayback() {
-    if (!port || operations.length === 0) return;
+    console.log('togglePlayback called, isPlayingPlayback:', isPlayingPlayback, 'isPausedPlayback:', isPausedPlayback);
+    if (!port || operations.length === 0) {
+      console.log('Early return: port or operations empty');
+      return;
+    }
 
     if (!isPlayingPlayback) {
+      console.log('Starting playback');
       isPlayingPlayback = true;
       isPausedPlayback = false;
       port.postMessage({ type: 'startPlayback', operations });
@@ -541,16 +587,42 @@
       isPausedPlayback = false;
       port.postMessage({ type: 'resumePlayback' });
       updatePlaybackButtonState(false);
+      if (elements.btnStepOver) {
+        elements.btnStepOver.disabled = true;
+      }
     } else {
       isPausedPlayback = true;
       port.postMessage({ type: 'pausePlayback' });
       updatePlaybackButtonState(true);
+      if (elements.btnStepOver) {
+        elements.btnStepOver.disabled = false;
+      }
     }
   }
 
   function stepOver() {
-    if (!port || !isPlayingPlayback) return;
-    port.postMessage({ type: 'stepOver' });
+    if (!port || operations.length === 0) return;
+
+    if (!isPlayingPlayback) {
+      isPlayingPlayback = true;
+      isPausedPlayback = true;
+      if (elements.playbackIndicator) {
+        elements.playbackIndicator.hidden = false;
+      }
+      if (elements.playbackStep) {
+        elements.playbackStep.textContent = `0/${operations.length}`;
+      }
+      updatePlaybackButtonState(true);
+      if (elements.btnStopPlayback) {
+        elements.btnStopPlayback.disabled = false;
+      }
+      if (elements.btnStepOver) {
+        elements.btnStepOver.disabled = false;
+      }
+      currentPlaybackStep = 0;
+    }
+
+    port.postMessage({ type: 'stepOver', operations });
   }
 
   function stopPlayback() {
@@ -569,10 +641,12 @@
     if (elements.operationsList) {
       const items = elements.operationsList.querySelectorAll('.operation-item');
       items.forEach((item, index) => {
-        if (index < step) {
+        if (index + 1 < step) {
           item.classList.add('completed');
-        } else if (index === step) {
+          item.classList.remove('active');
+        } else if (index + 1 === step) {
           item.classList.add('active');
+          item.classList.remove('completed');
           item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         } else {
           item.classList.remove('active', 'completed');
@@ -592,7 +666,7 @@
       const playIcon = elements.btnPlayback.querySelector('.btn-icon-play');
       const pauseIcon = elements.btnPlayback.querySelector('.btn-icon-pause');
       const btnText = elements.btnPlayback.querySelector('.btn-text');
-      if (playIcon) playIcon.style.display = 'block';
+      if (playIcon) playIcon.style.display = 'flex';
       if (pauseIcon) pauseIcon.style.display = 'none';
       if (btnText) btnText.textContent = '回放';
       elements.btnPlayback.disabled = operations.length === 0;
