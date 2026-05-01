@@ -1,0 +1,15 @@
+{
+  "name": "browser-recorder-native-host",
+  "version": "1.0.0",
+  "description": "Native host for Browser Operation Recorder to control real system cursor",
+  "main": "native-host.js",
+  "scripts": {
+    "start": "node native-host.js"
+  },
+  "dependencies": {
+    "@jitsi/robotjs": "^0.6.22"
+  },
+  "keywords": ["chrome-extension", "native-messaging", "robotjs"],
+  "author": "",
+  "license": "MIT"
+}

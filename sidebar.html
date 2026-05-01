@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>浏览器操作录制器</title>
+  <link rel="stylesheet" href="sidebar.css">
+</head>
+<body>
+  <div class="sidebar-container">
+    <header class="sidebar-header">
+      <h1 class="sidebar-title">
+        <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <circle cx="12" cy="12" r="4" fill="currentColor"/>
+        </svg>
+        操作录制器
+      </h1>
+      <div class="recording-status" id="recordingStatus">
+        <span class="status-indicator"></span>
+        <span class="status-text">未录制</span>
+      </div>
+    </header>
+
+    <section class="control-section">
+      <div class="control-buttons">
+        <button class="btn btn-primary" id="btnRecord" title="开始录制">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="12" cy="12" r="8"/>
+          </svg>
+          <span>开始录制</span>
+        </button>
+        <button class="btn btn-warning" id="btnPause" disabled title="暂停录制">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="4" width="4" height="16"/>
+            <rect x="14" y="4" width="4" height="16"/>
+          </svg>
+          <span>暂停</span>
+        </button>
+        <button class="btn btn-danger" id="btnStop" disabled title="停止录制">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="4" y="4" width="16" height="16" rx="2"/>
+          </svg>
+          <span>停止</span>
+        </button>
+        <button class="btn btn-secondary" id="btnClear" disabled title="清空录制">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"/>
+          </svg>
+          <span>清空</span>
+        </button>
+      </div>
+      <div class="recording-stats" id="recordingStats">
+        <div class="stat-item">
+          <span class="stat-label">操作数</span>
+          <span class="stat-value" id="operationCount">0</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">录制时长</span>
+          <span class="stat-value" id="recordingDuration">00:00</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="operations-section">
+      <div class="section-header">
+        <h2 class="section-title">操作列表</h2>
+        <button class="btn-icon-only" id="btnScrollToTop" title="回到顶部">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 15l-6-6-6 6"/>
+          </svg>
+        </button>
+      </div>
+      <div class="operations-list" id="operationsList">
+        <div class="empty-state" id="emptyState">
+          <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <path d="M9 9h6M9 12h6M9 15h4"/>
+          </svg>
+          <p class="empty-text">暂无录制的操作</p>
+          <p class="empty-hint">点击"开始录制"按钮开始</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="action-section">
+      <button class="btn btn-export" id="btnExport" disabled>
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+        </svg>
+        <span>导出 JSON</span>
+      </button>
+      <div class="playback-controls">
+        <button class="btn btn-playback" id="btnPlayback" disabled title="回放">
+          <svg class="btn-icon btn-icon-play" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M8 5v14l11-7z"/>
+          </svg>
+          <svg class="btn-icon btn-icon-pause" viewBox="0 0 24 24" fill="currentColor" style="display:none">
+            <rect x="6" y="4" width="4" height="16"/>
+            <rect x="14" y="4" width="4" height="16"/>
+          </svg>
+          <span class="btn-text">回放</span>
+        </button>
+        <button class="btn btn-playback" id="btnStopPlayback" disabled title="停止">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="4" y="4" width="16" height="16" rx="2"/>
+          </svg>
+          <span>停止</span>
+        </button>
+        <button class="btn btn-playback" id="btnStepOver" disabled title="单步跳过">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M5 4l10 8-10 8V4zM19 5v14"/>
+          </svg>
+          <span>跳过</span>
+        </button>
+      </div>
+    </section>
+
+    <div class="playback-indicator" id="playbackIndicator" hidden>
+      <div class="playback-progress">
+        <span class="playback-label">正在回放:</span>
+        <span class="playback-step" id="playbackStep">0/0</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="operation-detail-modal" id="operationDetailModal" hidden>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">操作详情</h3>
+        <button class="btn-close" id="btnCloseModal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-footer">
+        <button class="btn btn-danger btn-small" id="btnDeleteOperation">删除此操作</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="sidebar.js"></script>
+</body>
+</html>

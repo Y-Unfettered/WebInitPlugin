@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Browser Operation Recorder</title>
+  <link rel="stylesheet" href="sidebar.css">
+</head>
+<body>
+  <div id="app">
+    <header class="header">
+      <h1 class="title">🎬 操作录制器</h1>
+      <div id="recordingStatus" class="status-indicator status-idle">
+        <span class="status-dot"></span>
+        <span id="statusText" class="status-text">未录制</span>
+      </div>
+    </header>
+
+    <section class="controls">
+      <button id="btnRecord" class="btn btn-primary">
+        <span class="btn-icon">▶</span>
+        <span>开始录制</span>
+      </button>
+      <button id="btnPause" class="btn btn-warning" disabled>
+        <span class="btn-icon">⏸</span>
+        <span>暂停</span>
+      </button>
+      <button id="btnStop" class="btn btn-danger" disabled>
+        <span class="btn-icon">⏹</span>
+        <span>停止</span>
+      </button>
+      <button id="btnClear" class="btn btn-secondary" disabled>
+        <span class="btn-icon">🗑</span>
+        <span>清空</span>
+      </button>
+    </section>
+
+    <section class="stats">
+      <div class="stat-item">
+        <span class="stat-label">操作数量</span>
+        <span id="operationCount" class="stat-value">0</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">录制时长</span>
+        <span id="recordingDuration" class="stat-value">00:00</span>
+      </div>
+    </section>
+
+    <section class="operation-list-container">
+      <div class="operation-list-header">
+        <h2>录制操作列表</h2>
+        <button id="btnScrollToTop" class="btn btn-scroll-top" title="滚动到顶部">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 19V5M5 12l7-7 7 7"/>
+          </svg>
+        </button>
+      </div>
+      <div id="operationsList" class="operation-list">
+        <div id="emptyState" class="empty-state">
+          <p>暂无录制操作</p>
+          <p class="empty-hint">点击"开始录制"按钮开始录制浏览器操作</p>
+        </div>
+      </div>
+    </section>
+
+    <div id="playbackIndicator" class="playback-indicator hidden">
+      <span>回放进度:</span>
+      <span id="playbackStep">0/0</span>
+    </div>
+
+    <section class="actions">
+      <button id="btnExport" class="btn btn-export" disabled>
+        <span class="btn-icon">📥</span>
+        <span>导出 JSON</span>
+      </button>
+      <div class="playback-controls">
+        <button id="btnPlayback" class="btn btn-playback" disabled>
+          <span class="btn-icon">▶</span>
+          <span>回放</span>
+        </button>
+        <button id="btnStepOver" class="btn btn-step" disabled>
+          <span class="btn-icon">⏭</span>
+          <span>单步</span>
+        </button>
+        <button id="btnStopPlayback" class="btn btn-stop-playback" disabled>
+          <span class="btn-icon">⏹</span>
+          <span>停止</span>
+        </button>
+      </div>
+    </section>
+
+    <div id="operationDetailModal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>操作详情</h3>
+          <button id="btnCloseModal" class="btn-close">×</button>
+        </div>
+        <div id="modalBody" class="modal-body">
+        </div>
+        <div class="modal-footer">
+          <button id="btnDeleteOperation" class="btn btn-danger-outline">
+            <span class="btn-icon">🗑</span>
+            <span>删除此操作</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="sidebar.js"></script>
+</body>
+</html>

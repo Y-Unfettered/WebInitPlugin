@@ -1,0 +1,9 @@
+{
+  "name": "com.browserrecorder.nativehost",
+  "description": "Native host for Browser Operation Recorder",
+  "path": "native-host-launcher.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://*"
+  ]
+}
