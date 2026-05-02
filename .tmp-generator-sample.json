@@ -1,0 +1,28 @@
+{
+  "version": "1.0",
+  "exportTime": "2026-05-01T17:41:05.419Z",
+  "totalSteps": 2,
+  "steps": [
+    {
+      "id": 1,
+      "type": "click",
+      "timestamp": 1777657265420,
+      "target": {
+        "text": "??A",
+        "selector": "#btnA"
+      },
+      "data": {}
+    },
+    {
+      "id": 2,
+      "type": "input",
+      "timestamp": 1777657265420,
+      "target": {
+        "selector": "#inputA"
+      },
+      "data": {
+        "value": "hello"
+      }
+    }
+  ]
+}

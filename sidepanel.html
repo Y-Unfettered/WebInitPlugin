@@ -1,23 +1,44 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Browser Operation Recorder</title>
+  <title>Automation Hub</title>
   <link rel="stylesheet" href="sidebar.css">
 </head>
 <body>
   <div id="app" class="app-shell">
+    <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
     <section id="homeView" class="view view-home">
       <header class="home-header">
         <div>
           <p class="eyebrow">Automation Hub</p>
-          <h1 class="home-title">自动化功能</h1>
-          <p class="home-subtitle">从首页选择功能，再进入对应的二级页面操作。</p>
+          <h1 class="home-title">自动化工具</h1>
+          <p class="home-subtitle">在首页选择工具，进入对应页面继续录制、编辑或复用自动化流程。</p>
         </div>
       </header>
 
-      <div class="feature-grid">
+      <div id="homeFeatureGrid" class="feature-grid">
+        <button id="openGeneratorCard" class="feature-card feature-card-generator" type="button">
+          <span class="feature-card-badge">工具工厂</span>
+          <div class="feature-card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 3v18"></path>
+              <path d="M3 12h18"></path>
+              <path d="M5.5 5.5l13 13"></path>
+              <path d="M18.5 5.5l-13 13"></path>
+            </svg>
+          </div>
+          <div class="feature-card-body">
+            <h2>生成自动化工具</h2>
+            <p>导入录制步骤并整理成可复用的自动化工具，最后生成首页工具卡片。</p>
+          </div>
+          <div class="feature-card-meta">
+            <span class="feature-metric">支持编辑</span>
+            <span class="feature-link">进入</span>
+          </div>
+        </button>
+
         <button id="openRecorderCard" class="feature-card feature-card-recorder" type="button">
           <span class="feature-card-badge">已接入</span>
           <div class="feature-card-icon">
@@ -37,6 +58,248 @@
           </div>
         </button>
       </div>
+    </section>
+
+    <section id="generatorView" class="view view-generator hidden">
+      <header class="header">
+        <div class="header-main">
+          <button id="btnBackFromGenerator" class="btn-back" type="button" aria-label="返回首页">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M15 18l-6-6 6-6"></path>
+            </svg>
+          </button>
+          <div>
+            <p class="eyebrow">Automation Builder</p>
+            <h1 class="title">生成自动化工具</h1>
+          </div>
+        </div>
+      </header>
+
+      <section class="generator-panel">
+        <div class="generator-intro">
+          <p class="generator-intro-title">导入录制结果</p>
+          <p class="generator-intro-text">选择“录制自动化操作”导出的 JSON 文件，自动解析并渲染步骤列表。</p>
+        </div>
+        <div class="generator-actions">
+          <input id="generatorFileInput" class="generator-file-input" type="file" accept=".json,application/json">
+          <button id="btnImportGeneratorJson" class="btn-import-json" type="button">
+            <span class="btn-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 3v12"></path>
+                <path d="M8 11l4 4 4-4"></path>
+                <path d="M4 21h16"></path>
+              </svg>
+            </span>
+            <span>覆盖导入 JSON</span>
+          </button>
+          <button id="btnAppendGeneratorJson" class="btn-runner-secondary btn-inline-action" type="button">
+            <span>追加 JSON</span>
+          </button>
+          <button id="btnImportRecordingToGenerator" class="btn-runner-secondary btn-inline-action" type="button">
+            <span>从当前录制追加</span>
+          </button>
+        </div>
+        <div class="generator-meta">
+          <div class="generator-meta-item">
+            <span class="generator-meta-label">当前文件</span>
+            <span id="generatorFileName" class="generator-meta-value">未导入</span>
+          </div>
+          <div class="generator-meta-item">
+            <span class="generator-meta-label">步骤数量</span>
+            <span id="generatorStepCount" class="generator-meta-value">0</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="operation-list-container">
+        <div class="operation-list-header">
+          <div>
+            <h2>自动化步骤</h2>
+            <p class="generator-list-hint">支持拖拽排序；拖到步骤底部的“融合到这里”区域可合并成一组。</p>
+          </div>
+        </div>
+        <div id="generatorOperationsList" class="operation-list">
+          <div id="generatorEmptyState" class="empty-state">
+            <p>暂未导入自动化步骤</p>
+            <p class="empty-hint">导入录制导出的 JSON 文件后，这里会显示自动化步骤。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="generator-footer">
+        <button id="btnOpenCreateToolModal" class="btn-create-tool" type="button" disabled>生成自动化工具</button>
+      </section>
+    </section>
+
+    <section id="runnerView" class="view view-runner hidden">
+      <header class="header">
+        <div class="header-main">
+          <button id="btnBackFromRunner" class="btn-back" type="button" aria-label="返回首页">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M15 18l-6-6 6-6"></path>
+            </svg>
+          </button>
+          <div>
+            <p class="eyebrow">Automation Runner</p>
+            <h1 id="runnerToolTitle" class="title">运行自动化工具</h1>
+          </div>
+        </div>
+      </header>
+
+      <section class="runner-page-nav">
+        <button class="runner-page-tab is-active" type="button" data-runner-page-target="config">1. 采集配置</button>
+        <button class="runner-page-tab" type="button" data-runner-page-target="fields">2. 采集字段</button>
+        <button class="runner-page-tab" type="button" data-runner-page-target="logs">3. 运行日志</button>
+      </section>
+
+      <section class="runner-layout">
+        <section class="runner-panel runner-page" data-runner-page="config">
+          <div class="generator-intro">
+            <p class="generator-intro-title">采集配置</p>
+            <p class="generator-intro-text">这里配置运行时要输入的条件、范围、数量和确认方式。</p>
+          </div>
+          <form id="runnerConfigForm" class="runner-form">
+            <label class="generator-field runner-form-full">
+              <span class="generator-field-label">关键词</span>
+              <input class="generator-text-input" type="text" data-runner-field="keyword" placeholder="例如：成人礼">
+            </label>
+
+            <div class="runner-form-grid">
+              <label class="generator-field">
+                <span class="generator-field-label">排序依据</span>
+                <select class="generator-text-input" data-runner-field="sortBy">
+                  <option value="mostLiked">最多点赞</option>
+                  <option value="latest">最新发布</option>
+                  <option value="mostCommented">最多评论</option>
+                </select>
+              </label>
+              <label class="generator-field">
+                <span class="generator-field-label">发布时间</span>
+                <select class="generator-text-input" data-runner-field="publishTime">
+                  <option value="7d">一周内</option>
+                  <option value="30d">一月内</option>
+                  <option value="90d">三月内</option>
+                  <option value="all">不限</option>
+                </select>
+              </label>
+              <label class="generator-field">
+                <span class="generator-field-label">视频时长</span>
+                <select class="generator-text-input" data-runner-field="videoDuration">
+                  <option value="all">不限</option>
+                  <option value="lt15">15 秒内</option>
+                  <option value="15to60">15 到 60 秒</option>
+                  <option value="1to5m">1 到 5 分钟</option>
+                  <option value="gt5m">5 分钟以上</option>
+                </select>
+              </label>
+              <label class="generator-field">
+                <span class="generator-field-label">搜索范围</span>
+                <select class="generator-text-input" data-runner-field="searchScope">
+                  <option value="all">不限</option>
+                  <option value="title">仅标题</option>
+                  <option value="content">标题和内容</option>
+                  <option value="author">作者</option>
+                </select>
+              </label>
+              <label class="generator-field">
+                <span class="generator-field-label">内容形式</span>
+                <select class="generator-text-input" data-runner-field="contentFormat">
+                  <option value="all">不限</option>
+                  <option value="video">视频</option>
+                  <option value="imageText">图文</option>
+                  <option value="liveReplay">直播回放</option>
+                </select>
+              </label>
+              <label class="generator-field">
+                <span class="generator-field-label">采集视频数量</span>
+                <input class="generator-text-input" type="number" min="1" data-runner-field="collectCount">
+              </label>
+              <label class="generator-field">
+                <span class="generator-field-label">每视频评论数</span>
+                <input class="generator-text-input" type="number" min="0" data-runner-field="commentCount">
+              </label>
+              <label class="generator-field">
+                <span class="generator-field-label">连续失败阈值</span>
+                <input class="generator-text-input" type="number" min="1" data-runner-field="failureThreshold">
+              </label>
+            </div>
+
+            <div class="runner-confirm-grid">
+              <label class="runner-checkbox">
+                <input type="checkbox" data-runner-confirm="confirmBeforeSearch">
+                <span>搜索前确认</span>
+              </label>
+              <label class="runner-checkbox">
+                <input type="checkbox" data-runner-confirm="confirmAfterFilter">
+                <span>筛选后确认</span>
+              </label>
+              <label class="runner-checkbox">
+                <input type="checkbox" data-runner-confirm="confirmBeforeEachCollect">
+                <span>每条采集前确认</span>
+              </label>
+              <label class="runner-checkbox">
+                <input type="checkbox" data-runner-confirm="confirmBeforeExport">
+                <span>导出前确认</span>
+              </label>
+            </div>
+          </form>
+        </section>
+
+        <section class="runner-panel runner-page hidden" data-runner-page="fields">
+          <div class="generator-intro">
+            <p class="generator-intro-title">采集字段</p>
+            <p class="generator-intro-text">勾选这次运行要输出哪些数据列。</p>
+          </div>
+          <div id="runnerCollectFields" class="runner-check-grid"></div>
+        </section>
+
+        <section class="runner-panel runner-page hidden" data-runner-page="logs">
+          <div class="generator-intro">
+            <p class="generator-intro-title">运行日志</p>
+            <p class="generator-intro-text">这里记录配置保存和后续运行过程中的关键事件。</p>
+          </div>
+          <div id="runnerLogList" class="runner-log-list">
+            <div class="empty-state">
+              <p>暂无运行日志</p>
+              <p class="empty-hint">保存配置或后续接入实际执行后，这里会显示时间线记录。</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="runner-panel runner-page hidden" data-runner-page="steps">
+          <div class="generator-intro">
+            <p class="generator-intro-title">步骤编辑</p>
+            <p class="generator-intro-text">这里直接编辑当前工具的步骤，不会跳转到生成自动化工具页面。</p>
+          </div>
+          <section class="operation-list-container runner-steps-container">
+            <div class="operation-list-header">
+              <div>
+                <h2>当前步骤</h2>
+                <p class="generator-list-hint">支持拖拽排序；拖到步骤底部的“融合到这里”区域可合并成一组。</p>
+              </div>
+              <div class="operation-list-actions">
+                <button id="btnAppendRunnerJson" class="btn-runner-secondary btn-inline-action" type="button">追加 JSON</button>
+                <button id="btnImportRecordingToRunner" class="btn-runner-secondary btn-inline-action" type="button">配置字段</button>
+              </div>
+            </div>
+            <div id="runnerStepsList" class="operation-list">
+              <div id="runnerStepsEmptyState" class="empty-state">
+                <p>暂无可编辑步骤</p>
+                <p class="empty-hint">当前工具还没有步骤，先回到生成自动化工具页导入或创建步骤。</p>
+              </div>
+            </div>
+          </section>
+        </section>
+      </section>
+
+      <section class="runner-footer">
+        <button id="btnEditRunnerTool" class="btn-runner-secondary" type="button">编辑步骤</button>
+        <button id="btnRunnerPrevPage" class="btn-runner-secondary" type="button">返回上页</button>
+        <button id="btnRunnerNextPage" class="btn-create-tool" type="button">进入下页</button>
+        <button id="btnRunRunner" class="btn-create-tool" type="button">运行脚本</button>
+        <button id="btnStopRunner" class="btn-runner-secondary hidden" type="button">完全停止</button>
+        <button id="btnSaveRunnerConfig" class="btn-create-tool" type="button">保存配置</button>
+      </section>
     </section>
 
     <section id="recorderView" class="view view-recorder hidden">
@@ -59,7 +322,7 @@
       </header>
 
       <section class="controls">
-        <button id="btnRecord" class="btn btn-primary">
+        <button id="btnRecord" class="btn btn-primary" type="button">
           <span class="btn-icon">
             <svg viewBox="0 0 24 24" fill="currentColor">
               <circle cx="12" cy="12" r="6"></circle>
@@ -67,7 +330,7 @@
           </span>
           <span>开始录制</span>
         </button>
-        <button id="btnPause" class="btn btn-warning" disabled>
+        <button id="btnPause" class="btn btn-warning" type="button" disabled>
           <span class="btn-icon">
             <svg viewBox="0 0 24 24" fill="currentColor">
               <rect x="7" y="5" width="4" height="14" rx="1"></rect>
@@ -76,7 +339,7 @@
           </span>
           <span>暂停</span>
         </button>
-        <button id="btnStop" class="btn btn-danger" disabled>
+        <button id="btnStop" class="btn btn-danger" type="button" disabled>
           <span class="btn-icon">
             <svg viewBox="0 0 24 24" fill="currentColor">
               <rect x="6" y="6" width="12" height="12" rx="2"></rect>
@@ -84,7 +347,7 @@
           </span>
           <span>停止</span>
         </button>
-        <button id="btnClear" class="btn btn-secondary" disabled>
+        <button id="btnClear" class="btn btn-secondary" type="button" disabled>
           <span class="btn-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M3 6h18"></path>
@@ -113,14 +376,14 @@
           <h2>录制操作列表</h2>
           <button id="btnScrollToTop" class="btn btn-scroll-top" title="滚动到顶部" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 19V5M5 12l7-7 7 7"/>
+              <path d="M12 19V5M5 12l7-7 7 7"></path>
             </svg>
           </button>
         </div>
         <div id="operationsList" class="operation-list">
           <div id="emptyState" class="empty-state">
             <p>暂无录制操作</p>
-            <p class="empty-hint">点击“开始录制”后，侧边栏会持续记录当前浏览器页内的交互步骤。</p>
+            <p class="empty-hint">点击“开始录制”后，侧边栏会持续记录当前浏览器页面内的交互步骤。</p>
           </div>
         </div>
       </section>
@@ -131,7 +394,7 @@
       </div>
 
       <section class="actions">
-        <button id="btnExport" class="btn btn-export" disabled>
+        <button id="btnExport" class="btn btn-export" type="button" disabled>
           <span class="btn-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 4v10"></path>
@@ -142,13 +405,13 @@
           <span>导出 JSON</span>
         </button>
         <div class="playback-controls">
-          <button id="btnPlayback" class="btn btn-playback" disabled title="回放" type="button">
+          <button id="btnPlayback" class="btn btn-playback" type="button" disabled>
             <span class="btn-icon btn-icon-play">
               <svg viewBox="0 0 24 24" fill="currentColor">
                 <path d="M8 6l10 6-10 6z"></path>
               </svg>
             </span>
-            <span class="btn-icon btn-icon-pause" style="display:none">
+            <span class="btn-icon btn-icon-pause hidden">
               <svg viewBox="0 0 24 24" fill="currentColor">
                 <rect x="7" y="5" width="4" height="14" rx="1"></rect>
                 <rect x="13" y="5" width="4" height="14" rx="1"></rect>
@@ -156,7 +419,7 @@
             </span>
             <span class="btn-text">回放</span>
           </button>
-          <button id="btnStepOver" class="btn btn-step" disabled type="button">
+          <button id="btnStepOver" class="btn btn-step" type="button" disabled>
             <span class="btn-icon">
               <svg viewBox="0 0 24 24" fill="currentColor">
                 <path d="M6 6l8 6-8 6z"></path>
@@ -165,7 +428,7 @@
             </span>
             <span>单步</span>
           </button>
-          <button id="btnStopPlayback" class="btn btn-stop-playback" disabled type="button">
+          <button id="btnStopPlayback" class="btn btn-stop-playback" type="button" disabled>
             <span class="btn-icon">
               <svg viewBox="0 0 24 24" fill="currentColor">
                 <rect x="6" y="6" width="12" height="12" rx="2"></rect>
@@ -196,6 +459,88 @@
             </span>
             <span>删除此操作</span>
           </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="createToolModal" class="modal hidden">
+      <div class="modal-content modal-content-wide">
+        <div class="modal-header">
+          <h3>生成自动化工具</h3>
+          <button id="btnCloseCreateToolModal" class="btn-close" type="button">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="tool-form">
+            <label class="generator-field">
+              <span class="generator-field-label">自动化名称</span>
+              <input id="toolNameInput" class="generator-text-input" type="text" placeholder="例如：商品筛选工具">
+            </label>
+            <label class="generator-field">
+              <span class="generator-field-label">简介</span>
+              <textarea id="toolDescriptionInput" class="generator-step-textarea" placeholder="简要说明这个自动化工具做什么。"></textarea>
+            </label>
+            <div class="generator-field">
+              <span class="generator-field-label">图标</span>
+              <button id="btnSelectToolIcon" class="tool-icon-trigger" type="button">
+                <span id="toolIconPreview" class="tool-icon-preview"></span>
+                <span id="toolIconLabel" class="tool-icon-label">选择图标</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btnConfirmCreateTool" class="btn btn-export" type="button">确认生成</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="iconPickerModal" class="modal hidden">
+      <div class="modal-content modal-content-wide">
+        <div class="modal-header">
+          <h3>选择图标</h3>
+          <button id="btnCloseIconPickerModal" class="btn-close" type="button">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="iconPickerGrid" class="icon-picker-grid"></div>
+          <input id="localIconInput" class="generator-file-input" type="file" accept="image/*">
+        </div>
+      </div>
+    </div>
+
+    <div id="stepSortModal" class="modal hidden">
+      <div class="modal-content modal-content-wide">
+        <div class="modal-header">
+          <h3>拖拽排序步骤</h3>
+          <button id="btnCloseStepSortModal" class="btn-close" type="button">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="sort-modal-hint">拖动下面的小卡片调整顺序，列表会实时同步到当前步骤编辑区。</p>
+          <div id="stepSortList" class="step-sort-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="configFieldModal" class="modal hidden">
+      <div class="modal-content modal-content-wide">
+        <div class="modal-header">
+          <h3>配置字段</h3>
+          <button id="btnCloseConfigFieldModal" class="btn-close" type="button">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="sort-modal-hint">可以调整采集配置页显示哪些字段，支持新增、改名、停用和删除自定义字段。</p>
+          <div id="configFieldManagerList" class="config-field-manager-list"></div>
+          <button id="btnAddConfigField" class="btn-runner-secondary config-field-add-button" type="button">新增字段</button>
+          <div id="configFieldTypeChooser" class="config-field-type-chooser hidden">
+            <button class="config-field-type-button" type="button" data-config-field-type-add="text">输入框</button>
+            <button class="config-field-type-button" type="button" data-config-field-type-add="number">数字框</button>
+            <button class="config-field-type-button" type="button" data-config-field-type-add="select">下拉框</button>
+            <button class="config-field-type-button" type="button" data-config-field-type-add="radio">单选框</button>
+            <button class="config-field-type-button" type="button" data-config-field-type-add="multiSelect">多选框</button>
+            <button class="config-field-type-button" type="button" data-config-field-type-add="checkbox">勾选项</button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btnSaveConfigFieldModal" class="btn btn-export" type="button">保存字段</button>
         </div>
       </div>
     </div>
